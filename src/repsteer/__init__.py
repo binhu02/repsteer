@@ -1,1 +1,57 @@
+"""Activation-first steering with explicit generation semantics."""
 
+from repsteer import (
+    artifacts,
+    capture,
+    data,
+    evaluate,
+    evaluation,
+    gates,
+    learners,
+    metrics,
+    models,
+    operators,
+    positions,
+    schedules,
+    sites,
+)
+from repsteer._version import __version__
+from repsteer.artifacts import (
+    ArtifactMetadata,
+    CompatibilityLevel,
+    DirectionArtifact,
+    ProbeArtifact,
+    SteeringArtifact,
+    SubspaceArtifact,
+    load_artifact,
+)
+from repsteer.core import RepSteerError, Intervention, Site, SteeringPlan, StepContext
+
+__all__ = [
+    "RepSteerError",
+    "ArtifactMetadata",
+    "CompatibilityLevel",
+    "DirectionArtifact",
+    "Intervention",
+    "ProbeArtifact",
+    "Site",
+    "SteeringArtifact",
+    "SteeringPlan",
+    "StepContext",
+    "SubspaceArtifact",
+    "__version__",
+    "artifacts",
+    "capture",
+    "data",
+    "evaluate",
+    "evaluation",
+    "gates",
+    "learners",
+    "load_artifact",
+    "metrics",
+    "models",
+    "operators",
+    "positions",
+    "schedules",
+    "sites",
+]
