@@ -28,6 +28,10 @@ class Constant(StrengthSchedule):
             self.alpha, device=activation.device, dtype=activation.dtype
         )
 
+    @property
+    def is_always_zero(self) -> bool:
+        return self.alpha == 0.0
+
     def with_alpha(self, alpha: float) -> "Constant":
         return replace(self, alpha=alpha)
 

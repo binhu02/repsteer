@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -13,6 +14,7 @@ from typing import Any, TypeVar, cast
 import torch
 from torch import Tensor
 
+from repsteer._version import __version__
 from repsteer.core.serialization import json_safe
 from repsteer.core.site import Site
 
@@ -51,12 +53,14 @@ class ArtifactMetadata:
     config: Mapping[str, Any] = field(default_factory=dict)
     architecture: str | None = None
     tokenizer: Mapping[str, Any] = field(default_factory=dict)
+    processor: Mapping[str, Any] = field(default_factory=dict)
+    modality: Mapping[str, Any] = field(default_factory=dict)
     dataset_fingerprint: str | None = None
     dtype: str | None = None
     normalization: str | None = None
     seed: int | None = None
     library: Mapping[str, Any] = field(
-        default_factory=lambda: {"name": "repsteer", "version": "0.1.0"}
+        default_factory=lambda: {"name": "repsteer", "version": __version__}
     )
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -69,6 +73,8 @@ class ArtifactMetadata:
             raise TypeError("ArtifactMetadata.seed must be an int or None")
         object.__setattr__(self, "config", _freeze(self.config))
         object.__setattr__(self, "tokenizer", _freeze(self.tokenizer))
+        object.__setattr__(self, "processor", _freeze(self.processor))
+        object.__setattr__(self, "modality", _freeze(self.modality))
         object.__setattr__(self, "library", _freeze(self.library))
         object.__setattr__(self, "provenance", _freeze(self.provenance))
         if self.dtype is not None:
@@ -105,6 +111,8 @@ class ArtifactMetadata:
                     "config": self.config,
                     "architecture": self.architecture,
                     "tokenizer": self.tokenizer,
+                    "processor": self.processor,
+                    "modality": self.modality,
                     "dataset_fingerprint": self.dataset_fingerprint,
                     "dtype": self.dtype,
                     "normalization": self.normalization,
@@ -132,6 +140,8 @@ class ArtifactMetadata:
                         "hidden_size": self.hidden_size,
                     },
                     "tokenizer": self.tokenizer,
+                    "processor": self.processor,
+                    "modality": self.modality,
                     "site": self.site.to_dict() if self.site is not None else None,
                     "normalization": self.normalization,
                     "dtype": self.dtype,
@@ -174,11 +184,13 @@ class ArtifactMetadata:
             config=value.get("config", {}),
             architecture=None if architecture is None else str(architecture),
             tokenizer=value.get("tokenizer", {}),
+            processor=value.get("processor", {}),
+            modality=value.get("modality", {}),
             dataset_fingerprint=value.get("dataset_fingerprint"),
             dtype=value.get("dtype"),
             normalization=value.get("normalization"),
             seed=value.get("seed"),
-            library=value.get("library", {"name": "repsteer", "version": "0.1.0"}),
+            library=value.get("library", {"name": "repsteer", "version": __version__}),
             provenance=value.get("provenance", {}),
         )
 
@@ -488,7 +500,87 @@ class ProbeArtifact(SteeringArtifact):
         return ProbeArtifact(metadata, self.weight, self.bias)
 
 
-Artifact = DirectionArtifact | SubspaceArtifact | ProbeArtifact
+@dataclass(frozen=True, slots=True)
+class SAEFeatureArtifact(SteeringArtifact):
+    """Portable identity and decoder direction for one SAE feature.
+
+    The SAE module itself is deliberately not retained: artifacts remain safe
+    tensor + JSON bundles, while runtime encoding is supplied by an
+    :class:`repsteer.sae.SAEAdapter`.
+    """
+
+    metadata: ArtifactMetadata
+    feature_id: int
+    decoder_direction: Tensor
+    score: float | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.feature_id, bool) or not isinstance(self.feature_id, int):
+            raise TypeError("SAEFeatureArtifact.feature_id must be an int")
+        if self.feature_id < 0:
+            raise ValueError("SAEFeatureArtifact.feature_id cannot be negative")
+        direction = _coerce_tensor(
+            self.decoder_direction,
+            name="decoder_direction",
+            ndim=(1,),
+        )
+        config = dict(self.metadata.config)
+        configured_id = config.get("feature_id")
+        if configured_id is not None and int(configured_id) != self.feature_id:
+            raise ValueError(
+                "metadata feature_id does not match SAEFeatureArtifact.feature_id"
+            )
+        configured_score = config.get("selection_score")
+        score = self.score
+        if score is None and configured_score is not None:
+            score = float(configured_score)
+        if score is not None:
+            score = float(score)
+            if not math.isfinite(score):
+                raise ValueError("SAE feature selection score must be finite")
+        config["feature_id"] = self.feature_id
+        if score is not None:
+            config["selection_score"] = score
+        metadata = self.metadata.with_updates(config=config)
+        metadata = _metadata_for_tensor(
+            metadata,
+            artifact_type="sae_feature",
+            hidden_size=int(direction.shape[-1]),
+            dtype=direction.dtype,
+        )
+        object.__setattr__(self, "decoder_direction", direction)
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "score", score)
+
+    @property
+    def direction(self) -> Tensor:
+        """Make decoder-direction add work with the ordinary ``Add`` operator."""
+
+        return self.decoder_direction
+
+    @property
+    def vector(self) -> Tensor:
+        return self.decoder_direction
+
+    def tensors(self) -> Mapping[str, Tensor]:
+        return MappingProxyType({"decoder_direction": self.decoder_direction})
+
+    def as_direction_artifact(self) -> DirectionArtifact:
+        """Return a plain direction view while preserving provenance."""
+
+        metadata = self.metadata.with_updates(artifact_type="direction")
+        return DirectionArtifact(metadata, self.decoder_direction)
+
+    def with_metadata(self, metadata: ArtifactMetadata) -> "SAEFeatureArtifact":
+        return SAEFeatureArtifact(
+            metadata,
+            self.feature_id,
+            self.decoder_direction,
+            self.score,
+        )
+
+
+Artifact = DirectionArtifact | SubspaceArtifact | ProbeArtifact | SAEFeatureArtifact
 
 
 __all__ = [
@@ -496,6 +588,7 @@ __all__ = [
     "ArtifactMetadata",
     "DirectionArtifact",
     "ProbeArtifact",
+    "SAEFeatureArtifact",
     "SteeringArtifact",
     "SubspaceArtifact",
 ]

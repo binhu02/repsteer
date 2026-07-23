@@ -17,6 +17,75 @@ def _validate_protocol(value: Any, method: str, role: str, index: int) -> None:
         )
 
 
+def _activation_gate_sites(gate: Any) -> tuple[Any, ...]:
+    """Collect explicit activation dependencies from logical gate trees."""
+
+    sites: list[Any] = []
+    evaluate_at = getattr(gate, "evaluate_at", None)
+    if evaluate_at is not None:
+        sites.append(evaluate_at)
+    nested = getattr(gate, "gates", ())
+    if isinstance(nested, (tuple, list)):
+        for value in nested:
+            sites.extend(_activation_gate_sites(value))
+    single = getattr(gate, "gate", None)
+    if single is not None:
+        sites.extend(_activation_gate_sites(single))
+    unique: list[Any] = []
+    for site in sites:
+        if site not in unique:
+            unique.append(site)
+    return tuple(unique)
+
+
+def _gate_artifacts(gate: Any) -> tuple[Any, ...]:
+    values: list[Any] = []
+    for name in ("probe", "direction", "feature"):
+        artifact = getattr(gate, name, None)
+        if (
+            name == "feature"
+            and hasattr(gate, "sae")
+            and getattr(gate, "sae", None) is None
+        ):
+            # A portable SAE feature's primary tensor is a decoder direction
+            # with residual width. A direct latent gate instead reads
+            # num_features-wide values and validates that width from metadata
+            # when it evaluates.
+            continue
+        if getattr(artifact, "metadata", None) is not None:
+            values.append(artifact)
+    nested = getattr(gate, "gates", ())
+    if isinstance(nested, (tuple, list)):
+        for value in nested:
+            values.extend(_gate_artifacts(value))
+    single = getattr(gate, "gate", None)
+    if single is not None:
+        values.extend(_gate_artifacts(single))
+    return tuple(values)
+
+
+def _gate_reductions(gate: Any) -> tuple[Any, ...]:
+    """Collect reduction modes from every activation gate in a logical tree."""
+
+    values: list[Any] = []
+    reduction = getattr(gate, "reduction", None)
+    if reduction is not None:
+        values.append(reduction)
+    nested = getattr(gate, "gates", ())
+    if isinstance(nested, (tuple, list)):
+        for value in nested:
+            values.extend(_gate_reductions(value))
+    single = getattr(gate, "gate", None)
+    if single is not None:
+        values.extend(_gate_reductions(single))
+    return tuple(values)
+
+
+def _is_statically_disabled(schedule: Any) -> bool:
+    marker = getattr(schedule, "is_always_zero", False)
+    return bool(marker() if callable(marker) else marker)
+
+
 def _assert_compatibility(
     artifact: Any,
     model: Any,
@@ -67,7 +136,12 @@ def compile_plan(
 
     if isinstance(plan, CompiledPlan):
         source = plan.source_model
-        if source is not None and source is not model:
+        if source is None:
+            raise PlanCompilationError(
+                "compiled plan has lost its source HFSteerableModel; compile the "
+                "original semantic SteeringPlan again for the target wrapper"
+            )
+        if source is not model:
             raise PlanCompilationError(
                 "compiled plan belongs to a different HFSteerableModel instance"
             )
@@ -149,6 +223,77 @@ def compile_plan(
             item_warnings.append(
                 f"artifact dtype {artifact_dtype} will be converted at runtime to {model_dtype}"
             )
+
+        gate_sites = _activation_gate_sites(intervention.gate)
+        if len(gate_sites) > 1:
+            rendered = ", ".join(str(value) for value in gate_sites)
+            raise PlanCompilationError(
+                f"intervention {declaration_index} combines activation gates at "
+                f"multiple sites ({rendered}); 0.2.0 sequence gates require one "
+                "shared prefill evaluation site"
+            )
+        gate_site = None
+        if gate_sites:
+            gate_semantic_site = gate_sites[0]
+            if getattr(gate_semantic_site, "stream", None) != "language":
+                raise PlanCompilationError(
+                    f"intervention {declaration_index} evaluates a cached sequence "
+                    f"gate at {gate_semantic_site}; 0.2.0 supports evaluate_at only "
+                    "on the language stream because vision/projector batches do not "
+                    "map one-to-one to language batch items"
+                )
+            try:
+                gate_site = model.resolve_site(gate_semantic_site)
+            except Exception as exc:
+                raise PlanCompilationError(
+                    f"failed to resolve gate dependency for intervention "
+                    f"{declaration_index} at {gate_semantic_site}: {exc}"
+                ) from exc
+            reductions = _gate_reductions(intervention.gate)
+            if "none" in reductions:
+                raise PlanCompilationError(
+                    "cached activation gates must reduce to one sequence-level "
+                    "value per batch item; reduction='none' is dynamic token gating"
+                )
+            for gate_artifact in _gate_artifacts(intervention.gate):
+                gate_metadata = getattr(gate_artifact, "metadata", None)
+                gate_source_site = getattr(gate_metadata, "site", None)
+                compatibility_site = (
+                    gate_source_site
+                    if gate_source_site is not None
+                    and gate_source_site != gate_semantic_site
+                    else gate_semantic_site
+                )
+                _assert_compatibility(
+                    gate_artifact,
+                    model,
+                    compatibility_site,
+                    gate_site.hidden_dim,
+                    compatibility,
+                )
+            item_warnings.append(
+                "sequence gate evaluated during prefill at "
+                f"{gate_semantic_site} and cached for decode"
+            )
+        else:
+            # Activation gates without evaluate_at consume the controlled
+            # tensor directly. They are dynamic (not cached), but their
+            # portable probe/direction still needs normal model compatibility.
+            for gate_artifact in _gate_artifacts(intervention.gate):
+                gate_metadata = getattr(gate_artifact, "metadata", None)
+                gate_source_site = getattr(gate_metadata, "site", None)
+                compatibility_site = (
+                    gate_source_site
+                    if gate_source_site is not None and gate_source_site != site
+                    else site
+                )
+                _assert_compatibility(
+                    gate_artifact,
+                    model,
+                    compatibility_site,
+                    resolved.hidden_dim,
+                    compatibility,
+                )
         compiled.append(
             CompiledIntervention(
                 declaration_index=declaration_index,
@@ -156,7 +301,9 @@ def compile_plan(
                 intervention=intervention,
                 site=site,
                 resolved_site=resolved,
+                gate_site=gate_site,
                 compatibility=actual_compatibility,
+                statically_disabled=_is_statically_disabled(intervention.strength),
                 warnings=tuple(item_warnings),
             )
         )

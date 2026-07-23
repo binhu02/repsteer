@@ -12,6 +12,7 @@ from repsteer import (
     models,
     operators,
     positions,
+    sae,
     schedules,
     sites,
 )
@@ -21,11 +22,19 @@ from repsteer.artifacts import (
     CompatibilityLevel,
     DirectionArtifact,
     ProbeArtifact,
+    SAEFeatureArtifact,
     SteeringArtifact,
     SubspaceArtifact,
     load_artifact,
 )
-from repsteer.core import RepSteerError, Intervention, Site, SteeringPlan, StepContext
+from repsteer.core import (
+    Intervention,
+    ProcessorCompatibilityError,
+    RepSteerError,
+    Site,
+    SteeringPlan,
+    StepContext,
+)
 
 __all__ = [
     "RepSteerError",
@@ -34,6 +43,8 @@ __all__ = [
     "DirectionArtifact",
     "Intervention",
     "ProbeArtifact",
+    "ProcessorCompatibilityError",
+    "SAEFeatureArtifact",
     "Site",
     "SteeringArtifact",
     "SteeringPlan",
@@ -52,6 +63,7 @@ __all__ = [
     "models",
     "operators",
     "positions",
+    "sae",
     "schedules",
     "sites",
 ]

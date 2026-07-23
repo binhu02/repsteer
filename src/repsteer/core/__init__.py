@@ -2,7 +2,6 @@
 
 from .context import GateContext, GenerationPhase, StepContext
 from .errors import (
-    RepSteerError,
     ArtifactCompatibilityError,
     ArtifactFormatError,
     GenerationPhaseError,
@@ -10,6 +9,8 @@ from .errors import (
     MissingOptionalDependencyError,
     PlanCompilationError,
     PositionResolutionError,
+    ProcessorCompatibilityError,
+    RepSteerError,
     SiteResolutionError,
     UnsafeArtifactError,
     UnsupportedArchitectureError,
@@ -31,6 +32,7 @@ __all__ = [
     "MissingOptionalDependencyError",
     "PlanCompilationError",
     "PositionResolutionError",
+    "ProcessorCompatibilityError",
     "Site",
     "SiteIO",
     "SiteResolutionError",

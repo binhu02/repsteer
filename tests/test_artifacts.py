@@ -11,6 +11,7 @@ from repsteer.artifacts import (
     SubspaceArtifact,
     load_artifact,
 )
+from repsteer.artifacts.processor import processor_metadata
 from repsteer.core import (
     ArtifactCompatibilityError,
     Site,
@@ -160,3 +161,68 @@ def test_attached_tensors_follow_primary_dtype_and_device():
     assert probe.bias is not None
     assert probe.bias.dtype == weight.dtype
     assert probe.bias.device == weight.device
+
+
+def test_multimodal_metadata_roundtrip_and_processor_compatibility(tmp_path):
+    artifact = _artifact().with_metadata(
+        _artifact().metadata.with_updates(
+            site=Site("vision", "vision_resid", 0),
+            processor={
+                "id": "tiny/processor",
+                "revision": "processor-r1",
+                "preprocess_fingerprint": "sha256:preprocess",
+            },
+            modality={
+                "kind": "image",
+                "modality_map_schema": "1.0",
+                "image_indices": [0],
+            },
+        )
+    )
+    artifact.save(tmp_path)
+    restored = load_artifact(tmp_path)
+
+    assert restored.metadata.processor["revision"] == "processor-r1"
+    assert restored.metadata.modality["modality_map_schema"] == "1.0"
+
+    target = _Target()
+    target.processor_id = "tiny/processor"
+    target.processor_revision = "processor-r1"
+    target.processor_preprocess_fingerprint = "sha256:preprocess"
+    restored.bind(target)
+    target.processor_preprocess_fingerprint = "sha256:different-preprocess"
+    with pytest.raises(ArtifactCompatibilityError, match="preprocessing differs"):
+        restored.bind(target)
+    target.processor_preprocess_fingerprint = "sha256:preprocess"
+    target.processor_revision = "processor-r2"
+    with pytest.raises(ArtifactCompatibilityError, match="processor identity differs"):
+        restored.bind(target)
+
+
+def test_exact_processor_compatibility_includes_preprocessing_fingerprint():
+    class ImageProcessor:
+        def __init__(self, size):
+            self.size = size
+            self.image_mean = [0.5, 0.5, 0.5]
+
+    class Processor:
+        name_or_path = "tiny/processor"
+        _commit_hash = "processor-r1"
+
+        def __init__(self, size):
+            self.image_processor = ImageProcessor(size)
+
+    source = _Target()
+    source.processor = Processor({"height": 224, "width": 224})
+    source.processor_id = "tiny/processor"
+    source.processor_revision = "processor-r1"
+    artifact = _artifact().with_metadata(
+        _artifact().metadata.with_updates(processor=processor_metadata(source))
+    )
+    target = _Target()
+    target.processor = Processor({"height": 448, "width": 448})
+    target.processor_id = "tiny/processor"
+    target.processor_revision = "processor-r1"
+
+    with pytest.raises(ArtifactCompatibilityError, match="preprocessing differs"):
+        artifact.bind(target)

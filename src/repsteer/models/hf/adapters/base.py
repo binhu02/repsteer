@@ -237,7 +237,13 @@ class ArchitectureAdapter(ABC):
     def hidden_size(self, model: nn.Module, site: Any | None = None) -> int:
         raise NotImplementedError
 
-    def build_modality_map(self, batch: Mapping[str, Tensor]) -> None:
+    def build_modality_map(
+        self,
+        batch: Mapping[str, Tensor],
+        *,
+        model: nn.Module | None = None,
+    ) -> Any | None:
+        del batch, model
         return None
 
     def generation_phase(
@@ -340,7 +346,7 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
         if actual_io != expected_io:
             raise _site_error(
                 f"semantic site {component!r} requires io={expected_io!r}, got "
-                f"io={actual_io!r}; the 0.1.0 semantic-site contract does not "
+                f"io={actual_io!r}; the decoder-only semantic-site contract does not "
                 "support module-I/O overrides"
             )
         if not isinstance(layer_index, int):
@@ -349,7 +355,7 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
             )
         if unit is not None:
             raise _site_error(
-                f"unit-level addressing is not supported for {component!r} in 0.1.0"
+                f"unit-level addressing is not supported for {component!r}"
             )
 
         layers, layers_path = self._layers(model)

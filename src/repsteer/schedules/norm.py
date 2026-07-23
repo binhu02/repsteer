@@ -49,6 +49,10 @@ class NormRelative(StrengthSchedule):
             norm = norm.clamp_min(self.eps)
         return (norm * self.ratio).to(dtype=activation.dtype)
 
+    @property
+    def is_always_zero(self) -> bool:
+        return self.ratio == 0.0
+
     def with_ratio(self, ratio: float) -> "NormRelative":
         return replace(self, ratio=ratio)
 

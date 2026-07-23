@@ -11,6 +11,7 @@ from repsteer.core.errors import ArtifactCompatibilityError
 from repsteer.core.site import Site
 
 from .base import ArtifactMetadata, SteeringArtifact
+from .processor import processor_metadata
 
 
 class CompatibilityLevel(str, Enum):
@@ -55,6 +56,8 @@ class CompatibilityResult:
     target_hidden_size: int | None
     artifact_site: Site | None
     target_site: Site | None
+    artifact_processor: str | None = None
+    target_processor: str | None = None
 
     @property
     def compatible(self) -> bool:
@@ -125,6 +128,20 @@ def _same_site_mapping(left: Site | None, right: Site | None) -> bool:
     )
 
 
+def _processor_attributes(
+    target: Any,
+) -> tuple[str | None, str | None, str | None]:
+    values = processor_metadata(target)
+    processor_id = values.get("id")
+    processor_revision = values.get("revision")
+    preprocess_fingerprint = values.get("preprocess_fingerprint")
+    return (
+        None if processor_id is None else str(processor_id),
+        None if processor_revision is None else str(processor_revision),
+        (None if preprocess_fingerprint is None else str(preprocess_fingerprint)),
+    )
+
+
 def check_compatibility(
     artifact: SteeringArtifact | ArtifactMetadata,
     target: Any,
@@ -136,6 +153,11 @@ def check_compatibility(
     target_id, target_revision, target_architecture, target_hidden = _target_attributes(
         target
     )
+    (
+        target_processor_id,
+        target_processor_revision,
+        target_preprocess_fingerprint,
+    ) = _processor_attributes(target)
     if hidden_size is not None:
         target_hidden = int(hidden_size)
     target_site = site or _get(target, "site")
@@ -187,7 +209,46 @@ def check_compatibility(
             f"({metadata.architecture!r} != {target_architecture!r})"
         )
 
-    if dimensions_match and sites_match and exact_id and exact_revision:
+    artifact_processor_id = metadata.processor.get("id")
+    artifact_processor_revision = metadata.processor.get("revision")
+    artifact_preprocess_fingerprint = metadata.processor.get("preprocess_fingerprint")
+    processor_match = True
+    if (
+        artifact_processor_id
+        or artifact_processor_revision
+        or artifact_preprocess_fingerprint
+    ):
+        processor_match = bool(
+            artifact_processor_id
+            and target_processor_id
+            and str(artifact_processor_id) == target_processor_id
+            and artifact_processor_revision
+            and target_processor_revision
+            and str(artifact_processor_revision) == target_processor_revision
+        )
+        if artifact_preprocess_fingerprint:
+            processor_match = bool(
+                processor_match
+                and target_preprocess_fingerprint
+                and str(artifact_preprocess_fingerprint)
+                == target_preprocess_fingerprint
+            )
+        if not processor_match:
+            reasons.append(
+                "processor identity differs or preprocessing differs "
+                f"({artifact_processor_id!r}@{artifact_processor_revision!r} != "
+                f"{target_processor_id!r}@{target_processor_revision!r}; "
+                f"preprocess {artifact_preprocess_fingerprint!r} != "
+                f"{target_preprocess_fingerprint!r})"
+            )
+
+    if (
+        dimensions_match
+        and sites_match
+        and exact_id
+        and exact_revision
+        and processor_match
+    ):
         level = CompatibilityLevel.EXACT
     elif dimensions_match and sites_match and architecture_match:
         level = CompatibilityLevel.ARCHITECTURE_COMPATIBLE
@@ -204,6 +265,18 @@ def check_compatibility(
         target_hidden_size=target_hidden,
         artifact_site=metadata.site,
         target_site=target_site,
+        artifact_processor=(
+            None
+            if not (artifact_processor_id or artifact_processor_revision)
+            else f"{artifact_processor_id or '<unknown>'}"
+            f"@{artifact_processor_revision or '<unknown>'}"
+        ),
+        target_processor=(
+            None
+            if not (target_processor_id or target_processor_revision)
+            else f"{target_processor_id or '<unknown>'}"
+            f"@{target_processor_revision or '<unknown>'}"
+        ),
     )
 
 
@@ -228,6 +301,8 @@ def assert_compatible(
             f"  target model: {result.target_model}\n"
             f"  artifact site: {result.artifact_site}\n"
             f"  target site: {result.target_site}\n"
+            f"  artifact processor: {result.artifact_processor}\n"
+            f"  target processor: {result.target_processor}\n"
             f"  details: {'; '.join(result.reasons)}\n"
             "  suggestion: relearn the artifact or explicitly request a weaker "
             "compatibility level after validating the target"

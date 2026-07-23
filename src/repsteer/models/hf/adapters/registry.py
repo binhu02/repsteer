@@ -10,6 +10,7 @@ from .gemma import GemmaAdapter
 from .llama import LlamaAdapter
 from .mistral import MistralAdapter
 from .qwen2 import Qwen2Adapter
+from .vlm import InternVLAdapter, Qwen2_5_VLAdapter
 
 
 def _unsupported(message: str) -> Exception:
@@ -66,7 +67,14 @@ class AdapterRegistry:
 
 
 DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
-    (GemmaAdapter(), LlamaAdapter(), MistralAdapter(), Qwen2Adapter())
+    (
+        GemmaAdapter(),
+        LlamaAdapter(),
+        MistralAdapter(),
+        Qwen2_5_VLAdapter(),
+        InternVLAdapter(),
+        Qwen2Adapter(),
+    )
 )
 
 

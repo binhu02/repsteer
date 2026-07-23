@@ -7,7 +7,7 @@ from repsteer.capture import CaptureRequest
 from repsteer.core import ArtifactCompatibilityError, HookLifecycleError, Intervention
 from repsteer.data import ContrastivePairs
 from repsteer.learners import DiffMean
-from repsteer.models import from_model
+from repsteer.models import from_model, from_pretrained
 from repsteer.operators import Add
 from repsteer.positions import AllTokens, GeneratedTokens, LastNonPaddingToken, TextSpan
 from repsteer.schedules import Constant
@@ -75,6 +75,39 @@ def _wrapper():
     return from_model(raw, _Tokenizer(), model_id="tiny/llama", revision="rev-1")
 
 
+def test_public_dtype_uses_the_transformers_4x_loading_keyword():
+    config = transformers.LlamaConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+    )
+    raw = transformers.LlamaForCausalLM(config).eval()
+
+    class Loader:
+        seen = None
+
+        @classmethod
+        def from_pretrained(cls, _model_id, **kwargs):
+            cls.seen = kwargs
+            return raw
+
+    wrapped = from_pretrained(
+        "tiny/llama",
+        config=config,
+        model_class=Loader,
+        tokenizer=_Tokenizer(),
+        revision="rev-1",
+        dtype="float32",
+    )
+
+    assert wrapped.raw_model is raw
+    assert Loader.seen["torch_dtype"] is torch.float32
+    assert "dtype" not in Loader.seen
+
+
 def _artifact(wrapper, *, revision="rev-1"):
     site = resid_post(0)
     return DirectionArtifact(
@@ -110,7 +143,9 @@ def test_compile_is_pure_zero_strength_is_baseline_and_exception_cleans_hooks():
     assert "model.layers.0" in compiled.explain()
     try:
         with wrapper.steer(compiled):
-            assert wrapper.hook_manager.hook_count == 2  # root tracker + site hook
+            # A statically zero intervention is removed from runtime hook groups,
+            # including the otherwise-unneeded root phase tracker.
+            assert wrapper.hook_manager.hook_count == 0
             steered = wrapper(input_ids=ids).logits
             assert torch.equal(steered, baseline)
             raise RuntimeError("body failure")

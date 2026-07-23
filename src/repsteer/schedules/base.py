@@ -15,6 +15,12 @@ from repsteer.core import StepContext
 class StrengthSchedule(ABC):
     """Compute an intervention coefficient for the current activation."""
 
+    @property
+    def is_always_zero(self) -> bool:
+        """Whether the schedule is provably zero without evaluating an activation."""
+
+        return False
+
     @abstractmethod
     def value(self, activation: Tensor, context: StepContext) -> Tensor:
         raise NotImplementedError

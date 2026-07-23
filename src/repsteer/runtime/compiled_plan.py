@@ -31,7 +31,9 @@ class CompiledIntervention:
     intervention: Any
     site: Any
     resolved_site: ResolvedSite
+    gate_site: ResolvedSite | None
     compatibility: str
+    statically_disabled: bool = False
     warnings: tuple[str, ...] = ()
 
     @property
@@ -70,7 +72,24 @@ class CompiledIntervention:
             "positions": _description(self.intervention.positions),
             "strength": _description(self.intervention.strength),
             "gate": _description(self.intervention.gate),
+            "gate_dependency": (
+                {
+                    "site": (
+                        self.gate_site.site.to_dict()
+                        if hasattr(self.gate_site.site, "to_dict")
+                        else str(self.gate_site.site)
+                    ),
+                    "module_path": self.gate_site.module_path,
+                    "hook_kind": self.gate_site.hook_kind,
+                    "tensor_path": self.gate_site.tensor_accessor.description,
+                    "hidden_size": self.gate_site.hidden_dim,
+                    "cache": "prefill_sequence",
+                }
+                if self.gate_site is not None and not self.statically_disabled
+                else None
+            ),
             "compatibility": self.compatibility,
+            "statically_disabled": self.statically_disabled,
             "warnings": list(self.warnings),
         }
 
@@ -101,7 +120,11 @@ class CompiledPlan:
 
     @property
     def conflict_keys(self) -> frozenset[tuple[int, str, str]]:
-        return frozenset(item.conflict_key for item in self.interventions)
+        return frozenset(
+            item.conflict_key
+            for item in self.interventions
+            if not item.statically_disabled
+        )
 
     def groups(self) -> tuple[tuple[CompiledIntervention, ...], ...]:
         """Group callbacks by module/hook while preserving execution order."""
@@ -109,12 +132,36 @@ class CompiledPlan:
         ordered: list[list[CompiledIntervention]] = []
         positions: dict[tuple[int, str], int] = {}
         for item in self.interventions:
+            if item.statically_disabled:
+                continue
             key = (id(item.resolved_site.module), item.resolved_site.hook_kind)
             if key not in positions:
                 positions[key] = len(ordered)
                 ordered.append([])
             ordered[positions[key]].append(item)
         return tuple(tuple(group) for group in ordered)
+
+    def gate_groups(self) -> tuple[tuple[CompiledIntervention, ...], ...]:
+        """Group sequence-gate reads by concrete module/hook/accessor."""
+
+        ordered: list[list[CompiledIntervention]] = []
+        positions: dict[tuple[int, str, str], int] = {}
+        for item in self.interventions:
+            if item.gate_site is None or item.statically_disabled:
+                continue
+            key = item.gate_site.conflict_key
+            if key not in positions:
+                positions[key] = len(ordered)
+                ordered.append([])
+            ordered[positions[key]].append(item)
+        return tuple(tuple(group) for group in ordered)
+
+    def diagnostics(self) -> Any:
+        """Return direction, fusion and operator-order diagnostics."""
+
+        from .composition import diagnose_composition
+
+        return diagnose_composition(self)
 
     def to_dict(self) -> dict[str, Any]:
         non_commutative = _non_commutative_diagnostics(self.interventions)
@@ -126,8 +173,9 @@ class CompiledPlan:
                 "architecture": self.architecture,
             },
             "compatibility": self.compatibility,
-            "hook_count": len(self.groups()),
+            "hook_count": len(self.groups()) + len(self.gate_groups()),
             "interventions": [item.to_dict() for item in self.interventions],
+            "composition": self.diagnostics().to_dict(),
             "non_commutative_combinations": non_commutative,
             "warnings": list(self.warnings),
         }
@@ -152,7 +200,12 @@ class CompiledPlan:
         if format == "dict":
             return data
         if format == "json":
-            return json.dumps(data, indent=indent, sort_keys=True)
+            return json.dumps(
+                data,
+                allow_nan=False,
+                indent=indent,
+                sort_keys=True,
+            )
         if format != "text":
             raise ValueError("format must be 'text', 'dict', or 'json'")
         lines = [
@@ -169,6 +222,8 @@ class CompiledPlan:
                 f"{resolved['module_path']}:{resolved['hook_kind']} "
                 f"tensor={resolved['tensor_path']} hidden={resolved['hidden_size']}"
             )
+            if item.statically_disabled:
+                lines.append("      disabled: strength schedule is statically zero")
             lines.append(
                 "      "
                 f"operator={_name(item.intervention.operator)} "
@@ -176,11 +231,36 @@ class CompiledPlan:
                 f"strength={_name(item.intervention.strength)} "
                 f"gate={_name(item.intervention.gate)}"
             )
+            dependency = value["gate_dependency"]
+            if dependency is not None:
+                lines.append(
+                    "      gate dependency="
+                    f"{dependency['module_path']}:{dependency['hook_kind']} "
+                    f"cache={dependency['cache']}"
+                )
         for diagnostic in data["non_commutative_combinations"]:
             lines.append(
                 "  warning: non-commutative order "
                 f"{diagnostic['first']} -> {diagnostic['second']} at "
                 f"{diagnostic['module_path']}"
+            )
+        for group in data["composition"]["additive_fusion_groups"]:
+            lines.append(
+                "  additive fusion candidate: execution indices "
+                + ", ".join(str(index) for index in group)
+            )
+        condition = data["composition"]["condition_number"]
+        if condition is not None:
+            lines.append(
+                "  direction diagnostics: "
+                f"rank={data['composition']['effective_rank']} "
+                f"condition_number={condition:.6g}"
+            )
+        elif data["composition"]["condition_number_infinite"]:
+            lines.append(
+                "  direction diagnostics: "
+                f"rank={data['composition']['effective_rank']} "
+                "condition_number=inf"
             )
         lines.extend(f"  warning: {warning}" for warning in self.warnings)
         return "\n".join(lines)

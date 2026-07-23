@@ -118,6 +118,7 @@ def apply_mask(original: Tensor, modified: Tensor, mask: Tensor) -> Tensor:
 def position_selector_from_dict(value: Mapping[str, Any]) -> PositionSelector:
     """Deserialize built-in selectors from safe configuration data."""
 
+    from .modality import ImagePatches, ImageTokens, ObjectPatches
     from .span import SpecialToken, TextSpan
     from .token import (
         AllTokens,
@@ -151,6 +152,12 @@ def position_selector_from_dict(value: Mapping[str, Any]) -> PositionSelector:
         )
     if kind in ("special_token", "specialtoken"):
         return SpecialToken(str(value["token"]), token_id=value.get("token_id"))
+    if kind in ("image_tokens", "imagetokens"):
+        return ImageTokens(image_index=value.get("image_index", 0))
+    if kind in ("image_patches", "imagepatches"):
+        return ImagePatches(value["mask"], image_index=value.get("image_index", 0))
+    if kind in ("object_patches", "objectpatches"):
+        return ObjectPatches(value["boxes"], image_index=value.get("image_index", 0))
     raise PositionResolutionError(f"Unknown position selector type {kind!r}")
 
 

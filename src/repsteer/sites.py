@@ -50,6 +50,27 @@ def head_out(layer: int, *, unit: SiteUnit = None, **kwargs: Any) -> Site:
     return _site("head_out", layer, unit=unit, **kwargs)
 
 
+def vision_resid(layer: int, **kwargs: Any) -> Site:
+    kwargs.setdefault("stream", "vision")
+    return _site("vision_resid", layer, **kwargs)
+
+
+def projector_in(**kwargs: Any) -> Site:
+    kwargs.setdefault("stream", "projector")
+    kwargs.setdefault("io", "input")
+    return _site("projector_in", layer=None, **kwargs)
+
+
+def projector_out(**kwargs: Any) -> Site:
+    kwargs.setdefault("stream", "projector")
+    return _site("projector_out", layer=None, **kwargs)
+
+
+def fusion_out(**kwargs: Any) -> Site:
+    kwargs.setdefault("stream", "fusion")
+    return _site("fusion_out", layer=None, **kwargs)
+
+
 def logits(**kwargs: Any) -> Site:
     return _site("logits", layer=None, **kwargs)
 
@@ -57,10 +78,14 @@ def logits(**kwargs: Any) -> Site:
 __all__ = [
     "Site",
     "attn_out",
+    "fusion_out",
     "head_out",
     "logits",
     "mlp_out",
+    "projector_in",
+    "projector_out",
     "resid_mid",
     "resid_post",
     "resid_pre",
+    "vision_resid",
 ]

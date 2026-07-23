@@ -9,10 +9,16 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from repsteer.core.errors import HookLifecycleError, PositionResolutionError
+from repsteer.core.errors import (
+    GenerationPhaseError,
+    HookLifecycleError,
+    PositionResolutionError,
+)
 from repsteer.positions.base import apply_mask, validate_mask
 
 from .compiled_plan import CompiledIntervention, CompiledPlan
+
+_MISSING = object()
 
 
 def _owner_key() -> tuple[int, int | None]:
@@ -45,6 +51,9 @@ def _gate_weights(gate: Any, mask: Tensor, activation: Tensor) -> tuple[Tensor, 
     elif value.ndim == 1:
         if value.numel() == batch:
             value = value[:, None].expand(batch, sequence)
+        elif value.numel() > 0 and batch % value.numel() == 0:
+            value = value.repeat_interleave(batch // value.numel())
+            value = value[:, None].expand(batch, sequence)
         elif batch == 1 and value.numel() == sequence:
             value = value[None, :]
         else:
@@ -70,6 +79,30 @@ def _gate_weights(gate: Any, mask: Tensor, activation: Tensor) -> tuple[Tensor, 
     if bool(((value < 0) | (value > 1)).any()):
         raise PositionResolutionError("gate weights must lie in [0, 1]")
     return value * mask.to(dtype=value.dtype), False
+
+
+def _cacheable_sequence_gate(value: Any, activation: Tensor, context: Any) -> Tensor:
+    """Validate that a prefill gate can be reused as one value per sequence."""
+
+    tensor = torch.as_tensor(value, device=activation.device)
+    while tensor.ndim > 1 and tensor.shape[-1] == 1:
+        tensor = tensor.squeeze(-1)
+    batch = context.resolved_batch_size()
+    if tensor.ndim > 1 or (tensor.ndim == 1 and tensor.numel() not in (1, batch)):
+        raise GenerationPhaseError(
+            "a cached sequence gate must return a scalar or one value per "
+            f"batch item; got shape {tuple(tensor.shape)} for batch {batch}"
+        )
+    if tensor.dtype != torch.bool:
+        if not bool(torch.isfinite(tensor).all()):
+            raise GenerationPhaseError(
+                "a cached sequence gate returned non-finite values"
+            )
+        if bool(((tensor < 0) | (tensor > 1)).any()):
+            raise GenerationPhaseError(
+                "cached sequence gate weights must lie in [0, 1]"
+            )
+    return tensor
 
 
 def _blend(
@@ -100,6 +133,8 @@ def apply_compiled_intervention(
     item: CompiledIntervention,
     activation: Tensor,
     context: Any,
+    *,
+    gate_value: Any = _MISSING,
 ) -> Tensor:
     """Execute one numeric intervention and merge only selected positions."""
 
@@ -117,7 +152,22 @@ def apply_compiled_intervention(
     # outside the selected token mask.
     raw_mask = intervention.positions.select(activation, context)
     mask = validate_mask(torch.as_tensor(raw_mask), activation, context)
-    gate_value = intervention.gate.evaluate(context)
+    if gate_value is _MISSING:
+        if item.gate_site is not None:
+            raise GenerationPhaseError(
+                "sequence gate has no cached prefill value. Its evaluate_at site "
+                "must execute before the controlled site in prefill, and generation "
+                "cannot start from a pre-populated KV cache"
+            )
+        metadata = dict(context.metadata)
+        metadata.update(
+            {
+                "activation": activation,
+                "gate_activation": activation,
+            }
+        )
+        gate_context = context.with_updates(metadata=metadata)
+        gate_value = intervention.gate.evaluate(gate_context)
     weights, boolean_gate = _gate_weights(gate_value, mask, activation)
 
     # Pass a clone so a third-party in-place operator cannot alter positions
@@ -140,6 +190,7 @@ class _Frame:
     compiled: CompiledPlan
     handles: list[Any]
     conflict_keys: frozenset[tuple[int, str, str]]
+    gate_values: dict[int, Tensor]
     idempotent: bool = False
 
 
@@ -195,14 +246,34 @@ class HookManager:
     ) -> None:
         del module
         self.assert_owner()
-        self.tracker.update(args, kwargs)
+        modality_map = None
+        if not (
+            self.tracker.generation_active and self.tracker.modality_map is not None
+        ):
+            modality_inputs = kwargs
+            if "input_ids" not in kwargs and args and isinstance(args[0], Tensor):
+                modality_inputs = {**kwargs, "input_ids": args[0]}
+            modality_map = self.wrapper.adapter.build_modality_map(
+                modality_inputs, model=self.wrapper.model
+            )
+        context = self.tracker.update(args, kwargs, modality_map=modality_map)
+        self._reset_gate_values(context)
         return None
 
     def _tracking_pre_without_kwargs(self, module: Any, args: tuple[Any, ...]) -> None:
         del module
         self.assert_owner()
-        self.tracker.update(args, {})
+        context = self.tracker.update(args, {})
+        self._reset_gate_values(context)
         return None
+
+    def _reset_gate_values(self, context: Any) -> None:
+        first_tracked_forward = context.metadata.get("tracked_forward_index", 0) == 0
+        if context.phase == "decode" and not first_tracked_forward:
+            return
+        with self._lock:
+            for frame in self._frames:
+                frame.gate_values.clear()
 
     def _install_tracking_hook(self) -> Any:
         try:
@@ -217,7 +288,11 @@ class HookManager:
                 self._tracking_pre_without_kwargs
             )
 
-    def _callback(self, group: tuple[CompiledIntervention, ...]) -> Callable[..., Any]:
+    def _callback(
+        self,
+        group: tuple[CompiledIntervention, ...],
+        gate_values: dict[int, Tensor],
+    ) -> Callable[..., Any]:
         resolved = group[0].resolved_site
 
         def callback(module: Any, args: tuple[Any, ...], output: Any = None) -> Any:
@@ -226,26 +301,95 @@ class HookManager:
             for item in group:
                 intervention = item.intervention
                 activation = item.resolved_site.read(container)
-                context = self.tracker.for_activation(activation)
+                context = self.tracker.for_activation(
+                    activation,
+                    stream=getattr(item.site, "stream", "language"),
+                    component=getattr(item.site, "component", None),
+                )
                 if intervention.phase != "both" and intervention.phase != context.phase:
                     continue
-                changed = apply_compiled_intervention(item, activation, context)
+                cached_gate = gate_values.get(item.execution_index, _MISSING)
+                changed = apply_compiled_intervention(
+                    item,
+                    activation,
+                    context,
+                    gate_value=cached_gate,
+                )
                 container = item.resolved_site.rebuild(container, changed)
             return container
 
         return callback
 
-    def _install_plan(self, compiled: CompiledPlan) -> list[Any]:
+    def _gate_callback(
+        self,
+        group: tuple[CompiledIntervention, ...],
+        gate_values: dict[int, Tensor],
+    ) -> Callable[..., Any]:
+        resolved = group[0].gate_site
+        if resolved is None:  # pragma: no cover - gate_groups guarantees this
+            raise RuntimeError("compiled gate group has no resolved dependency")
+
+        def callback(module: Any, args: tuple[Any, ...], output: Any = None) -> None:
+            del module
+            container = args if resolved.hook_kind == "forward_pre" else output
+            activation = resolved.read(container)
+            context = self.tracker.for_activation(
+                activation,
+                stream=getattr(resolved.site, "stream", "language"),
+                component=getattr(resolved.site, "component", None),
+            )
+            if context.phase == "decode":
+                return None
+            metadata = dict(context.metadata)
+            metadata.update(
+                {
+                    "activation": activation,
+                    "gate_activation": activation,
+                }
+            )
+            gate_context = context.with_updates(metadata=metadata)
+            for item in group:
+                value = item.intervention.gate.evaluate(gate_context)
+                tensor = _cacheable_sequence_gate(value, activation, gate_context)
+                gate_values[item.execution_index] = tensor.detach().clone()
+            return None
+
+        return callback
+
+    @staticmethod
+    def _register(resolved: Any, callback: Callable[..., Any]) -> Any:
+        if resolved.hook_kind == "forward_pre":
+            return resolved.module.register_forward_pre_hook(callback)
+        return resolved.module.register_forward_hook(callback)
+
+    def _install_plan(
+        self,
+        compiled: CompiledPlan,
+        gate_values: dict[int, Tensor],
+    ) -> list[Any]:
         handles: list[Any] = []
         try:
+            # Read dependencies are installed first. If a gate reads the same
+            # tensor that an intervention writes, it observes the unmodified
+            # activation and caches one sequence value per batch item.
+            for group in compiled.gate_groups():
+                resolved = group[0].gate_site
+                if resolved is None:  # pragma: no cover - structural guard
+                    continue
+                handles.append(
+                    self._register(
+                        resolved,
+                        self._gate_callback(group, gate_values),
+                    )
+                )
             for group in compiled.groups():
                 resolved = group[0].resolved_site
-                callback = self._callback(group)
-                if resolved.hook_kind == "forward_pre":
-                    handle = resolved.module.register_forward_pre_hook(callback)
-                else:
-                    handle = resolved.module.register_forward_hook(callback)
-                handles.append(handle)
+                handles.append(
+                    self._register(
+                        resolved,
+                        self._callback(group, gate_values),
+                    )
+                )
             return handles
         except BaseException:
             for handle in reversed(handles):
@@ -268,7 +412,15 @@ class HookManager:
                 or _same_declared_interventions(self._frames[-1].compiled, compiled)
             )
             if same_as_outer:
-                self._frames.append(_Frame(compiled, [], frozenset(), idempotent=True))
+                self._frames.append(
+                    _Frame(
+                        compiled,
+                        [],
+                        frozenset(),
+                        {},
+                        idempotent=True,
+                    )
+                )
                 return
 
             active_keys = frozenset(
@@ -288,21 +440,34 @@ class HookManager:
                     f"{', '.join(paths)}; compile one SteeringPlan to define order"
                 )
 
+            root_frame = not self._frames
             installed_tracking = False
             try:
-                if not self._frames:
+                if root_frame:
                     self._owner = key
+                if self._tracking_handle is None and (
+                    compiled.groups() or compiled.gate_groups()
+                ):
                     self._tracking_handle = self._install_tracking_hook()
                     installed_tracking = True
-                handles = self._install_plan(compiled)
-                self._frames.append(_Frame(compiled, handles, compiled.conflict_keys))
+                gate_values: dict[int, Tensor] = {}
+                handles = self._install_plan(compiled, gate_values)
+                self._frames.append(
+                    _Frame(
+                        compiled,
+                        handles,
+                        compiled.conflict_keys,
+                        gate_values,
+                    )
+                )
             except BaseException as exc:
                 if installed_tracking and self._tracking_handle is not None:
                     try:
                         self._tracking_handle.remove()
                     finally:
                         self._tracking_handle = None
-                        self._owner = None
+                if root_frame:
+                    self._owner = None
                 if isinstance(exc, HookLifecycleError):
                     raise
                 raise HookLifecycleError(
@@ -326,6 +491,18 @@ class HookManager:
                     handle.remove()
                 except Exception as exc:
                     failures.append(str(exc))
+            if (
+                self._frames
+                and self._tracking_handle is not None
+                and not any(active.handles for active in self._frames)
+            ):
+                try:
+                    self._tracking_handle.remove()
+                except Exception as exc:
+                    failures.append(str(exc))
+                self._tracking_handle = None
+                if not self.tracker.generation_active:
+                    self.tracker.current = None
             if not self._frames:
                 if self._tracking_handle is not None:
                     try:

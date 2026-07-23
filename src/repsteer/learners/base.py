@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 import torch
 from torch import Tensor
 
+from repsteer._version import __version__
 from repsteer.capture import (
     ActivationBatch,
     ActivationStore,
@@ -244,14 +245,33 @@ def artifact_metadata(
         "config": config,
         "architecture": str(architecture),
         "tokenizer": _tokenizer_metadata(model, str(model_id), revision),
+        "processor": _processor_metadata(model),
+        "modality": _modality_metadata(model, learner.site),
         "dataset_fingerprint": str(data.fingerprint),
         "dtype": "float32",
         "normalization": learner.normalize,
         "seed": learner.seed,
-        "library": {"name": "repsteer", "version": "0.1.0"},
+        "library": {"name": "repsteer", "version": __version__},
         "provenance": provenance,
     }
     return ArtifactMetadata(**kwargs)
+
+
+def _processor_metadata(model: Any) -> dict[str, Any]:
+    from repsteer.artifacts.processor import processor_metadata
+
+    return processor_metadata(model)
+
+
+def _modality_metadata(model: Any, site: Any) -> dict[str, Any]:
+    if getattr(model, "processor", None) is None:
+        return {}
+    return {
+        "kind": "image",
+        "stream": getattr(site, "stream", None),
+        "component": getattr(site, "component", None),
+        "modality_map_schema": "1.0",
+    }
 
 
 def _tokenizer_metadata(

@@ -12,6 +12,7 @@ from repsteer.core.errors import (
     HookLifecycleError,
     MissingOptionalDependencyError,
     PositionResolutionError,
+    ProcessorCompatibilityError,
 )
 from repsteer.positions.base import validate_mask
 from repsteer.runtime.compiled_plan import CompiledPlan
@@ -97,6 +98,68 @@ def _batch_size_from_text(value: Any) -> int:
     return 1
 
 
+def _image_cardinality(
+    value: Any,
+) -> tuple[int, tuple[int, ...] | None]:
+    """Return total images and optional per-prompt counts.
+
+    A flat sequence follows the Transformers processor-order convention. A
+    nested list/tuple is treated as an explicit prompt batch, so its per-prompt
+    cardinality can be validated before processor-specific placeholder
+    expansion. Array/tensor batches use their leading dimension.
+    """
+
+    ndim = getattr(value, "ndim", None)
+    shape = getattr(value, "shape", None)
+    if isinstance(ndim, int):
+        if ndim <= 3:
+            return 1, None
+        if ndim == 4 and shape is not None:
+            return int(shape[0]), None
+        raise PositionResolutionError(
+            "static image input must be one image or a rank-4 image batch"
+        )
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return 0, None
+        if all(isinstance(item, (list, tuple)) for item in value):
+            per_prompt = tuple(len(item) for item in value)
+            return sum(per_prompt), per_prompt
+        return len(value), None
+    return 1, None
+
+
+def _component_identity(value: Any) -> tuple[str | None, str | None]:
+    """Best-effort id/revision extraction for tokenizer/processor validation."""
+
+    if value is None:
+        return None, None
+    candidates = (
+        value,
+        getattr(value, "config", None),
+        getattr(value, "image_processor", None),
+        getattr(value, "tokenizer", None),
+    )
+    identifier: Any | None = None
+    revision: Any | None = None
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        identifier = identifier or getattr(candidate, "name_or_path", None)
+        identifier = identifier or getattr(candidate, "_name_or_path", None)
+        revision = revision or getattr(candidate, "_commit_hash", None)
+        revision = revision or getattr(candidate, "revision", None)
+        init_kwargs = getattr(candidate, "init_kwargs", None)
+        if isinstance(init_kwargs, Mapping):
+            revision = revision or init_kwargs.get("_commit_hash")
+            revision = revision or init_kwargs.get("revision")
+            identifier = identifier or init_kwargs.get("name_or_path")
+    return (
+        None if identifier is None else str(identifier),
+        None if revision is None else str(revision),
+    )
+
+
 def _extract_sequences(raw: Any) -> Tensor:
     if isinstance(raw, Tensor):
         return raw
@@ -147,11 +210,13 @@ class HFSteerableModel:
         adapter: ArchitectureAdapter | None = None,
         model_id: str | None = None,
         revision: str | None = None,
+        processor_id: str | None = None,
+        processor_revision: str | None = None,
     ) -> None:
         if not isinstance(model, nn.Module):
             raise TypeError("model must be a torch.nn.Module")
         self.model = model
-        self.tokenizer = tokenizer
+        self.tokenizer = tokenizer or getattr(processor, "tokenizer", None)
         self.processor = processor
         self.adapter = adapter or get_adapter(model)
         config = getattr(model, "config", None)
@@ -167,6 +232,31 @@ class HFSteerableModel:
             if (revision or inferred_revision)
             else None
         )
+        inferred_processor_id, inferred_processor_revision = _component_identity(
+            processor
+        )
+        self.processor_id = (
+            str(processor_id or inferred_processor_id)
+            if (processor_id or inferred_processor_id)
+            else None
+        )
+        self.processor_revision = (
+            str(processor_revision or inferred_processor_revision)
+            if (processor_revision or inferred_processor_revision)
+            else None
+        )
+        if (
+            processor is not None
+            and self.revision is not None
+            and self.processor_revision is not None
+            and self.revision != self.processor_revision
+        ):
+            raise ProcessorCompatibilityError(
+                "processor/model revision mismatch: "
+                f"processor {self.processor_id or '<unknown>'}"
+                f"@{self.processor_revision} != model {self.model_id}@{self.revision}; "
+                "load the processor from the same pinned revision"
+            )
         architectures = getattr(config, "architectures", None)
         self.architecture = (
             str(architectures[0])
@@ -268,20 +358,176 @@ class HFSteerableModel:
                 ) from exc
         return _move_mapping(encoded, self.device)
 
+    def _encode_multimodal(
+        self,
+        texts: Any,
+        images: Any,
+        *,
+        processor_kwargs: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self.processor is None:
+            raise MissingOptionalDependencyError(
+                "image inputs require a multimodal processor; pass processor=... "
+                "to from_model or load a VLM with from_pretrained"
+            )
+        texts = self._prepare_multimodal_texts(texts, images)
+        options = dict(processor_kwargs or {})
+        options.setdefault("return_tensors", "pt")
+        options.setdefault("padding", _batch_size_from_text(texts) > 1)
+        encoded = self.processor(text=texts, images=images, **options)
+        if not isinstance(encoded, Mapping):
+            try:
+                encoded = dict(encoded)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "multimodal processor must return a mapping of model inputs"
+                ) from exc
+        return _move_mapping(encoded, self.device)
+
+    def _prepare_multimodal_texts(self, texts: Any, images: Any) -> Any:
+        """Inject one unambiguous image placeholder for built-in VLMs.
+
+        Real Qwen2.5-VL and InternVL processors expand their ``image_token`` in
+        the prompt. Automatic insertion is safe only for one prompt and one
+        image. Multi-image and prompt-batch callers must place the processor's
+        token explicitly so image ordering is visible and verifiable.
+        """
+
+        architecture = getattr(self.adapter, "architecture_name", "")
+        if architecture not in {"qwen2_5_vl", "internvl"}:
+            return texts
+        processor = self.processor
+        image_token = getattr(processor, "image_token", None)
+        if not isinstance(image_token, str) or not image_token:
+            raise ProcessorCompatibilityError(
+                f"{architecture} processor must expose a non-empty image_token"
+            )
+        single_prompt = isinstance(texts, str)
+        tuple_batch = isinstance(texts, tuple)
+        if single_prompt:
+            prompts = [texts]
+        elif isinstance(texts, Sequence) and all(
+            isinstance(item, str) for item in texts
+        ):
+            prompts = list(texts)
+        else:
+            raise TypeError(
+                "multimodal processor text must be a string or string batch"
+            )
+
+        image_count, per_prompt = _image_cardinality(images)
+        if image_count <= 0:
+            raise PositionResolutionError(
+                "multimodal generation requires at least one static image"
+            )
+        if per_prompt is not None and len(per_prompt) != len(prompts):
+            raise PositionResolutionError(
+                "a nested images batch must contain one image list per prompt"
+            )
+
+        placeholder_counts = tuple(prompt.count(image_token) for prompt in prompts)
+        explicit_count = sum(placeholder_counts)
+        if explicit_count:
+            if explicit_count != image_count:
+                raise PositionResolutionError(
+                    "image placeholder count does not match image input count: "
+                    f"found {explicit_count} {image_token!r} placeholder(s) for "
+                    f"{image_count} image(s)"
+                )
+            if per_prompt is not None and placeholder_counts != per_prompt:
+                raise PositionResolutionError(
+                    "per-prompt image placeholder counts do not match the nested "
+                    "images batch"
+                )
+            return texts
+
+        if len(prompts) != 1 or image_count != 1:
+            raise PositionResolutionError(
+                "automatic image placeholder insertion is only unambiguous for "
+                "one prompt and one image; insert processor.image_token explicitly "
+                "for multi-image or prompt-batch generation"
+            )
+
+        placeholder = image_token
+        if architecture == "qwen2_5_vl":
+            tokenizer = getattr(processor, "tokenizer", None)
+            config = getattr(self.model, "config", None)
+
+            def special_token(name: str, fallback: str) -> str:
+                token_id = getattr(config, f"{name}_token_id", None)
+                convert = getattr(tokenizer, "convert_ids_to_tokens", None)
+                if token_id is not None and callable(convert):
+                    value = convert(int(token_id))
+                    content = getattr(value, "content", value)
+                    if isinstance(content, str) and content:
+                        return content
+                return fallback
+
+            start = special_token("vision_start", "<|vision_start|>")
+            end = special_token("vision_end", "<|vision_end|>")
+            placeholder = f"{start}{image_token}{end}"
+
+        prompts[0] = f"{placeholder}\n{prompts[0]}"
+        if single_prompt:
+            return prompts[0]
+        return tuple(prompts) if tuple_batch else prompts
+
     def _prepare_generation(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> tuple[
-        tuple[Any, ...], dict[str, Any], Tensor | None, Tensor | None, Tensor | None
+        tuple[Any, ...],
+        dict[str, Any],
+        Tensor | None,
+        Tensor | None,
+        Tensor | None,
+        Any | None,
     ]:
         tokenizer_kwargs = kwargs.pop("tokenizer_kwargs", None)
+        processor_kwargs = kwargs.pop("processor_kwargs", None)
         prompt = kwargs.pop("prompt", None)
+        singular_image = kwargs.pop("image", None)
+        plural_images = kwargs.pop("images", None)
+        if singular_image is not None and plural_images is not None:
+            raise TypeError("pass either image=... or images=..., not both")
+        images = plural_images if plural_images is not None else singular_image
+        if kwargs.get("video") is not None or kwargs.get("videos") is not None:
+            raise NotImplementedError(
+                "repsteer 0.2.0 supports static VLM images, not video modality maps"
+            )
         values = args
         if prompt is not None:
             if values:
                 raise TypeError("prompt was passed both positionally and by keyword")
             values = (prompt,)
 
-        if values and (
+        if images is not None:
+            if not values or not (
+                isinstance(values[0], str)
+                or (
+                    isinstance(values[0], Sequence)
+                    and not isinstance(values[0], (Tensor, bytes, bytearray, Mapping))
+                    and all(isinstance(item, str) for item in values[0])
+                )
+            ):
+                raise TypeError(
+                    "multimodal generation requires a string prompt or prompt batch"
+                )
+            if len(values) != 1:
+                raise TypeError(
+                    "multimodal generation accepts one prompt or prompt batch argument"
+                )
+            encoded = self._encode_multimodal(
+                values[0], images, processor_kwargs=processor_kwargs
+            )
+            duplicates = set(encoded) & set(kwargs)
+            if duplicates:
+                raise TypeError(
+                    f"processed inputs conflict with generation kwargs: "
+                    f"{sorted(duplicates)}"
+                )
+            kwargs = {**encoded, **kwargs}
+            values = ()
+        elif values and (
             isinstance(values[0], str)
             or (
                 isinstance(values[0], Sequence)
@@ -333,21 +579,35 @@ class HFSteerableModel:
             input_ids = kwargs["inputs"]
         inputs_embeds = kwargs.get("inputs_embeds")
         attention_mask = kwargs.get("attention_mask")
+        modality_inputs = kwargs
+        if isinstance(input_ids, Tensor) and not isinstance(
+            kwargs.get("input_ids"), Tensor
+        ):
+            modality_inputs = {**kwargs, "input_ids": input_ids}
+        modality_map = self.adapter.build_modality_map(
+            modality_inputs, model=self.model
+        )
         return (
             values,
             kwargs,
             input_ids if isinstance(input_ids, Tensor) else None,
             inputs_embeds if isinstance(inputs_embeds, Tensor) else None,
             attention_mask if isinstance(attention_mask, Tensor) else None,
+            modality_map,
         )
 
     def generate(self, *args: Any, **kwargs: Any) -> GenerationResult:
         self.hook_manager.assert_owner()
         seed = kwargs.pop("seed", None)
         decode_kwargs = kwargs.pop("decode_kwargs", None) or {}
-        values, generation_kwargs, input_ids, inputs_embeds, attention_mask = (
-            self._prepare_generation(args, kwargs)
-        )
+        (
+            values,
+            generation_kwargs,
+            input_ids,
+            inputs_embeds,
+            attention_mask,
+            modality_map,
+        ) = self._prepare_generation(args, kwargs)
         was_training = self.model.training
         self.model.eval()
         try:
@@ -355,6 +615,7 @@ class HFSteerableModel:
                 input_ids=input_ids,
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
+                modality_map=modality_map,
             ):
                 with (
                     _seeded(None if seed is None else int(seed), self.model),
@@ -492,7 +753,8 @@ class HFSteerableModel:
 
         manually_tracked = not self.hook_manager.active
         if manually_tracked:
-            self.generation_tracker.update((), batch)
+            modality_map = self.adapter.build_modality_map(batch, model=self.model)
+            self.generation_tracker.update((), batch, modality_map=modality_map)
         forward_completed = False
         try:
             with _seeded(request.seed, self.model), _capture_grad(request.gradient):
@@ -514,7 +776,11 @@ class HFSteerableModel:
             )
 
         activation = captured[0]
-        context = self.generation_tracker.for_activation(activation)
+        context = self.generation_tracker.for_activation(
+            activation,
+            stream=getattr(request.site, "stream", "language"),
+            component=getattr(request.site, "component", None),
+        )
         texts = (
             tuple(rendered_inputs)
             if isinstance(rendered_inputs, Sequence)
@@ -553,6 +819,8 @@ class HFSteerableModel:
                 "resolved_module_path": resolved.module_path,
                 "resolved_hook_kind": resolved.hook_kind,
                 "architecture": resolved.architecture_name,
+                "processor_id": self.processor_id,
+                "processor_revision": self.processor_revision,
             },
             pooled=False,
         )
@@ -616,14 +884,20 @@ def from_pretrained(
     model: nn.Module | None = None,
     tokenizer: Any | None = None,
     processor: Any | None = None,
+    processor_id: str | None = None,
+    processor_revision: str | None = None,
     adapter: ArchitectureAdapter | None = None,
     revision: str | None = None,
     dtype: str | torch.dtype | None = None,
     tokenizer_kwargs: Mapping[str, Any] | None = None,
+    processor_kwargs: Mapping[str, Any] | None = None,
+    multimodal: bool | None = None,
+    model_class: Any | None = None,
     **model_kwargs: Any,
 ) -> HFSteerableModel:
-    """Load a causal LM lazily, or wrap an already-constructed local model."""
+    """Load a text/VLM model lazily, or wrap an already-constructed model."""
 
+    processor_supplied = processor is not None
     if model is not None:
         if model_name_or_path is not None:
             raise TypeError("pass either model=... or model_name_or_path, not both")
@@ -631,6 +905,8 @@ def from_pretrained(
             model,
             tokenizer,
             processor=processor,
+            processor_id=processor_id,
+            processor_revision=processor_revision,
             adapter=adapter,
             revision=revision,
         )
@@ -639,6 +915,8 @@ def from_pretrained(
             model_name_or_path,
             tokenizer,
             processor=processor,
+            processor_id=processor_id,
+            processor_revision=processor_revision,
             adapter=adapter,
             revision=revision,
         )
@@ -647,21 +925,59 @@ def from_pretrained(
 
     transformers = _transformers()
     resolved_dtype = _torch_dtype(dtype)
-    # Transformers now names this loading argument ``dtype``.  Translate the
-    # legacy spelling if callers supplied it through **model_kwargs**, so this
-    # wrapper never forwards the deprecated ``torch_dtype`` argument.
+    # repsteer exposes the forward-compatible public spelling ``dtype`` while
+    # supporting Transformers 4.49 through 4.x.  The older loading keyword is
+    # accepted throughout that declared range; early 4.x releases would pass
+    # an unknown ``dtype`` through to the model constructor instead.
     legacy_dtype = model_kwargs.pop("torch_dtype", None)
     if legacy_dtype is not None:
         if dtype is not None:
             raise TypeError("pass either dtype=... or torch_dtype=..., not both")
         resolved_dtype = _torch_dtype(legacy_dtype)
     if resolved_dtype is not None:
-        model_kwargs.setdefault("dtype", resolved_dtype)
+        model_kwargs.setdefault("torch_dtype", resolved_dtype)
     if revision is not None:
         model_kwargs.setdefault("revision", revision)
-    raw_model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name_or_path, **model_kwargs
+
+    config = model_kwargs.get("config")
+    if config is None:
+        config_options: dict[str, Any] = {}
+        if revision is not None:
+            config_options["revision"] = revision
+        if "trust_remote_code" in model_kwargs:
+            config_options["trust_remote_code"] = model_kwargs["trust_remote_code"]
+        config = transformers.AutoConfig.from_pretrained(
+            model_name_or_path, **config_options
+        )
+        model_kwargs["config"] = config
+    inferred_multimodal = bool(
+        getattr(config, "vision_config", None) is not None
+        or getattr(config, "visual", None) is not None
+        or "vl" in str(getattr(config, "model_type", "")).lower()
     )
+    use_multimodal = inferred_multimodal if multimodal is None else bool(multimodal)
+    loader = model_class
+    if loader is None:
+        loader = (
+            getattr(
+                transformers,
+                "AutoModelForImageTextToText",
+                transformers.AutoModelForVision2Seq,
+            )
+            if use_multimodal
+            else transformers.AutoModelForCausalLM
+        )
+    raw_model = loader.from_pretrained(model_name_or_path, **model_kwargs)
+    commit = getattr(getattr(raw_model, "config", None), "_commit_hash", None)
+    if use_multimodal and processor is None:
+        options = dict(processor_kwargs or tokenizer_kwargs or {})
+        if revision is not None:
+            options.setdefault("revision", revision)
+        processor = transformers.AutoProcessor.from_pretrained(
+            model_name_or_path, **options
+        )
+    if tokenizer is None and processor is not None:
+        tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is None:
         options = dict(tokenizer_kwargs or {})
         if revision is not None:
@@ -669,7 +985,6 @@ def from_pretrained(
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             model_name_or_path, **options
         )
-    commit = getattr(getattr(raw_model, "config", None), "_commit_hash", None)
     return HFSteerableModel(
         raw_model,
         tokenizer,
@@ -677,6 +992,22 @@ def from_pretrained(
         adapter=adapter,
         model_id=model_name_or_path,
         revision=commit or revision,
+        processor_id=(
+            processor_id
+            or (
+                model_name_or_path
+                if processor is not None and not processor_supplied
+                else None
+            )
+        ),
+        processor_revision=(
+            processor_revision
+            or (
+                commit or revision
+                if processor is not None and not processor_supplied
+                else None
+            )
+        ),
     )
 
 

@@ -99,6 +99,7 @@ def operator_from_dict(value: Mapping[str, Any]) -> Operator:
     from .add import Add, Subtract
     from .projection import RemoveProjection
     from .replace import Replace
+    from .sae import Ablate, Clamp, SAEAblate, SAEClamp
 
     kind = str(value.get("type", "")).lower()
     if kind == "add":
@@ -109,6 +110,22 @@ def operator_from_dict(value: Mapping[str, Any]) -> Operator:
         return RemoveProjection(eps=value.get("eps", 1e-12))
     if kind == "replace":
         return Replace()
+    if kind in ("clamp", "latent_clamp"):
+        return Clamp(value["value"], feature_id=value.get("feature_id"))
+    if kind in ("ablate", "latent_ablate"):
+        return Ablate(feature_id=value.get("feature_id"))
+    if kind == "sae_clamp":
+        if value.get("sae_adapter") is not None:
+            raise ValueError(
+                "A serialized SAEClamp runtime handle must be rebound explicitly"
+            )
+        return SAEClamp(value["value"], feature_id=value.get("feature_id"))
+    if kind == "sae_ablate":
+        if value.get("sae_adapter") is not None:
+            raise ValueError(
+                "A serialized SAEAblate runtime handle must be rebound explicitly"
+            )
+        return SAEAblate(feature_id=value.get("feature_id"))
     raise ValueError(f"Unknown operator type {kind!r}")
 
 

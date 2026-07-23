@@ -17,6 +17,14 @@ from .registry import (
     register_adapter,
     registered_adapters,
 )
+from .vlm import (
+    InternVLAdapter,
+    ModalityMap,
+    Qwen2_5_VLAdapter,
+    Qwen2VLAdapter,
+    Qwen25VLAdapter,
+    SequenceLayout,
+)
 
 __all__ = [
     "AdapterRegistry",
@@ -24,12 +32,18 @@ __all__ = [
     "DEFAULT_ADAPTER_REGISTRY",
     "DecoderOnlyAdapter",
     "GemmaAdapter",
+    "InternVLAdapter",
     "LlamaAdapter",
     "MistralAdapter",
+    "ModalityMap",
     "PathTensorAccessor",
     "Qwen2Adapter",
+    "Qwen25VLAdapter",
+    "Qwen2VLAdapter",
+    "Qwen2_5_VLAdapter",
     "ResolvedSite",
     "RootOrFirstTensorAccessor",
+    "SequenceLayout",
     "TensorAccessor",
     "get_adapter",
     "register_adapter",

@@ -51,6 +51,10 @@ class MissingOptionalDependencyError(RepSteerError, ImportError):
     """A requested integration needs an optional dependency."""
 
 
+class ProcessorCompatibilityError(RepSteerError):
+    """A multimodal processor does not match the wrapped model revision."""
+
+
 class UnsafeArtifactError(RepSteerError):
     """An artifact failed an integrity or trust-policy check."""
 
@@ -64,6 +68,7 @@ __all__ = [
     "ArtifactCompatibilityError",
     "ArtifactFormatError",
     "PlanCompilationError",
+    "ProcessorCompatibilityError",
     "HookLifecycleError",
     "GenerationPhaseError",
     "MissingOptionalDependencyError",

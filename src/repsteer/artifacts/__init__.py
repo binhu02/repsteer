@@ -5,6 +5,7 @@ from .base import (
     ArtifactMetadata,
     DirectionArtifact,
     ProbeArtifact,
+    SAEFeatureArtifact,
     SteeringArtifact,
     SubspaceArtifact,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "CompatibilityResult",
     "DirectionArtifact",
     "ProbeArtifact",
+    "SAEFeatureArtifact",
     "SteeringArtifact",
     "SubspaceArtifact",
     "assert_compatible",

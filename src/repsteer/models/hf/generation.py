@@ -75,10 +75,15 @@ class GenerationTracker:
     _prompt_lengths: Tensor | None = None
     _initial_input_ids: Tensor | None = None
     _initial_attention_mask: Tensor | None = None
+    _modality_map: Any | None = None
 
     @property
     def generation_active(self) -> bool:
         return self._active
+
+    @property
+    def modality_map(self) -> Any | None:
+        return self._modality_map
 
     def begin(
         self,
@@ -86,6 +91,7 @@ class GenerationTracker:
         input_ids: Tensor | None,
         inputs_embeds: Tensor | None,
         attention_mask: Tensor | None,
+        modality_map: Any | None = None,
     ) -> None:
         if self._active:
             raise GenerationPhaseError(
@@ -98,6 +104,7 @@ class GenerationTracker:
         ).detach()
         self._initial_input_ids = input_ids
         self._initial_attention_mask = attention_mask
+        self._modality_map = modality_map
         self.current = None
 
     def end(self) -> None:
@@ -106,6 +113,7 @@ class GenerationTracker:
         self._prompt_lengths = None
         self._initial_input_ids = None
         self._initial_attention_mask = None
+        self._modality_map = None
         self.current = None
 
     @contextmanager
@@ -115,18 +123,26 @@ class GenerationTracker:
         input_ids: Tensor | None,
         inputs_embeds: Tensor | None,
         attention_mask: Tensor | None,
+        modality_map: Any | None = None,
     ) -> Iterator[None]:
         self.begin(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
+            modality_map=modality_map,
         )
         try:
             yield
         finally:
             self.end()
 
-    def update(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> StepContext:
+    def update(
+        self,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+        *,
+        modality_map: Any | None = None,
+    ) -> StepContext:
         input_ids, inputs_embeds, attention_mask = _model_inputs(args, kwargs)
         source = _first_tensor(input_ids, inputs_embeds, attention_mask)
         batch = int(source.shape[0]) if source is not None and source.ndim >= 2 else 1
@@ -175,6 +191,16 @@ class GenerationTracker:
             self._forward_index += 1
 
         device = source.device if source is not None else torch.device("cpu")
+        if modality_map is not None:
+            if self._active and self._modality_map is not None:
+                # Processor-derived maps are authoritative for a generation.
+                # A model forward may expose only a subset of those inputs.
+                modality_map = self._modality_map
+            elif self._active:
+                self._modality_map = modality_map
+        elif self._active:
+            modality_map = self._modality_map
+
         self.current = StepContext(
             phase=phase,
             batch_size=batch,
@@ -183,7 +209,7 @@ class GenerationTracker:
             generation_step=generation_step,
             attention_mask=attention_mask,
             token_ids=input_ids,
-            modality_map=None,
+            modality_map=modality_map,
             device=device,
             dtype=None,
             metadata={
@@ -197,7 +223,13 @@ class GenerationTracker:
         )
         return self.current
 
-    def for_activation(self, activation: Tensor) -> StepContext:
+    def for_activation(
+        self,
+        activation: Tensor,
+        *,
+        stream: str = "language",
+        component: str | None = None,
+    ) -> StepContext:
         if activation.ndim < 2:
             raise GenerationPhaseError(
                 f"steering activation must have at least 2 dimensions, got {activation.ndim}"
@@ -205,6 +237,36 @@ class GenerationTracker:
         batch = int(activation.shape[0]) if activation.ndim >= 3 else 1
         sequence = int(activation.shape[-2])
         context = self.current
+        if stream != "language":
+            language_batch = (
+                context.resolved_batch_size() if context is not None else None
+            )
+            metadata = dict(context.metadata) if context is not None else {}
+            metadata["language_batch_size"] = language_batch
+            metadata["site_stream"] = stream
+            metadata["site_component"] = component
+            return StepContext(
+                phase=context.phase if context is not None else "forward",
+                batch_size=batch,
+                sequence_length=sequence,
+                prompt_lengths=torch.full(
+                    (batch,),
+                    sequence,
+                    dtype=torch.long,
+                    device=activation.device,
+                ),
+                generation_step=(
+                    context.generation_step if context is not None else None
+                ),
+                attention_mask=None,
+                token_ids=None,
+                modality_map=(
+                    context.modality_map if context is not None else self._modality_map
+                ),
+                device=activation.device,
+                dtype=activation.dtype,
+                metadata=metadata,
+            )
         if context is None:
             context = StepContext(
                 phase="forward",
@@ -215,13 +277,16 @@ class GenerationTracker:
                 ),
                 attention_mask=None,
                 token_ids=None,
-                modality_map=None,
+                modality_map=self._modality_map,
                 device=activation.device,
                 dtype=activation.dtype,
             )
         prompt_lengths = context.prompt_lengths_for(batch, activation.device)
         attention_mask = _expand_batch(context.attention_mask, batch)
         token_ids = _expand_batch(context.token_ids, batch)
+        metadata = dict(context.metadata)
+        metadata["site_stream"] = stream
+        metadata["site_component"] = component
         return context.with_updates(
             batch_size=batch,
             sequence_length=sequence,
@@ -230,6 +295,7 @@ class GenerationTracker:
             token_ids=token_ids,
             device=activation.device,
             dtype=activation.dtype,
+            metadata=metadata,
         )
 
 

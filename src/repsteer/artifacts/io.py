@@ -23,6 +23,7 @@ from .base import (
     ArtifactMetadata,
     DirectionArtifact,
     ProbeArtifact,
+    SAEFeatureArtifact,
     SteeringArtifact,
     SubspaceArtifact,
 )
@@ -162,6 +163,35 @@ def _build_artifact(
         if "weight" not in tensors:
             raise ArtifactFormatError("Probe artifact has no 'weight' tensor")
         return ProbeArtifact(metadata, tensors["weight"], tensors.get("bias"))
+    if artifact_type == "sae_feature":
+        if "decoder_direction" not in tensors:
+            raise ArtifactFormatError(
+                "SAE feature artifact has no 'decoder_direction' tensor"
+            )
+        feature_id = metadata.config.get("feature_id")
+        if feature_id is None:
+            raise ArtifactFormatError(
+                "SAE feature artifact metadata has no 'feature_id'"
+            )
+        try:
+            normalized_feature_id = int(feature_id)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactFormatError(
+                "SAE feature artifact feature_id must be an int"
+            ) from exc
+        score = metadata.config.get("selection_score")
+        try:
+            normalized_score = None if score is None else float(score)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactFormatError(
+                "SAE feature artifact selection_score must be numeric"
+            ) from exc
+        return SAEFeatureArtifact(
+            metadata,
+            normalized_feature_id,
+            tensors["decoder_direction"],
+            normalized_score,
+        )
     raise ArtifactFormatError(f"Unsupported artifact_type {artifact_type!r}")
 
 
