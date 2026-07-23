@@ -647,9 +647,16 @@ def from_pretrained(
 
     transformers = _transformers()
     resolved_dtype = _torch_dtype(dtype)
+    # Transformers now names this loading argument ``dtype``.  Translate the
+    # legacy spelling if callers supplied it through **model_kwargs**, so this
+    # wrapper never forwards the deprecated ``torch_dtype`` argument.
+    legacy_dtype = model_kwargs.pop("torch_dtype", None)
+    if legacy_dtype is not None:
+        if dtype is not None:
+            raise TypeError("pass either dtype=... or torch_dtype=..., not both")
+        resolved_dtype = _torch_dtype(legacy_dtype)
     if resolved_dtype is not None:
-        # ``torch_dtype`` works across the broadest Transformers 4.x range.
-        model_kwargs.setdefault("torch_dtype", resolved_dtype)
+        model_kwargs.setdefault("dtype", resolved_dtype)
     if revision is not None:
         model_kwargs.setdefault("revision", revision)
     raw_model = transformers.AutoModelForCausalLM.from_pretrained(

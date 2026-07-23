@@ -8,10 +8,8 @@ version = "0.1.0"
 description = "Representation engineering and activation steering toolkit for large language models"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {file = "LICENSE"}
-classifiers = [
-  "License :: OSI Approved :: Apache Software License",
-]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
