@@ -8,6 +8,6 @@ __pycache__/
 .venv/
 build/
 dist/
-artifacts/
+/artifacts/
 reports/
 .DS_Store
