@@ -962,7 +962,7 @@ def from_pretrained(
             getattr(
                 transformers,
                 "AutoModelForImageTextToText",
-                transformers.AutoModelForVision2Seq,
+                transformers.AutoModelForImageTextToText,
             )
             if use_multimodal
             else transformers.AutoModelForCausalLM
