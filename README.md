@@ -174,10 +174,80 @@ Pass `store=rs.capture.MemoryStore()` to cache results by capture request. Captu
 | --- | --- |
 | `rs.models.from_pretrained(model_id, *, revision=None, dtype=None, tokenizer=None, processor=None, **model_kwargs)` | Lazily load a Hugging Face text model or VLM; remaining arguments are passed to Transformers. |
 | `rs.models.from_model(raw_model, tokenizer=None, processor=None, adapter=None, model_id=None, revision=None)` | Wrap an already-constructed PyTorch/Transformers model. Provide stable `model_id` and `revision` values for local models. |
-| `model.generate(prompt_or_inputs, **kwargs)` | Hugging Face-style generation. It accepts strings, encoded mappings, or tensors; extra options include `seed` and `decode_kwargs`. VLMs accept `image=` or `images=`. |
+| `model.generate(prompt_or_inputs, **kwargs)` | Hugging Face-style generation. It accepts strings, structured chat messages, encoded mappings, or tensors; extra options include `seed`, `decode_kwargs`, and chat-template controls. VLMs accept `image=` or `images=`. |
 | `model.capture(request)` | Perform one raw activation capture; normally prefer `rs.capture.capture_activations()`. |
 | `model.compile(plan, compatibility="exact")` | Validate sites, artifacts, gates, and composition order; returns a `CompiledPlan`. |
 | `model.steer(plan, compatibility="exact")` | Return a context manager for calling `generate()` or `forward()` with steering active. |
+
+### Chat-template instruction models
+
+Pass Hugging Face-style messages directly to `generate()` for instruction
+checkpoints. A message mapping, one conversation, or a batch of conversations
+automatically uses `apply_chat_template`; raw strings retain the existing
+untamplated behavior unless you explicitly request a template.
+
+```python
+messages = [
+    {"role": "system", "content": "Answer concisely and accurately."},
+    {"role": "user", "content": "What is activation steering?"},
+]
+
+with model.steer(control):
+    result = model.generate(
+        messages=messages,  # Positional conversations work too.
+        max_new_tokens=96,
+        do_sample=False,
+        decode_kwargs={"skip_special_tokens": True},
+    )
+```
+
+Generation adds the assistant generation prompt by default. To template a raw
+string as one `user` turn, or to pass template-specific inputs, use:
+
+```python
+result = model.generate(
+    "Summarize the result.",
+    apply_chat_template=True,
+    system_prompt="Use one sentence.",
+    chat_template_kwargs={"tools": tools},  # Optional; passed to the template.
+    add_generation_prompt=True,
+    max_new_tokens=64,
+)
+```
+
+The rendered template owns its special/control tokens, so repsteer defaults to
+`add_special_tokens=False` while re-tokenizing it. Pass
+`tokenizer_kwargs={"add_special_tokens": True}` only when a custom template
+explicitly requires that behavior. For VLM generation with `image=` or
+`images=`, the processor's template renderer is preferred and the normal image
+placeholder/cardinality checks still apply.
+
+Activation capture and contrastive learners use the same rendering rules. Their
+`add_generation_prompt` default is `False`, which is usually appropriate when
+learning from complete chat examples:
+
+```python
+chat_data = rs.data.ContrastivePairs.from_records([
+    {
+        "positive_messages": [{"role": "user", "content": "Be helpful."}],
+        "negative_messages": [{"role": "user", "content": "Be cruel."}],
+    },
+])
+artifact = rs.learners.DiffMean(
+    site=rs.sites.resid_post(20),
+    positions=rs.positions.LastNonPaddingToken(),
+    apply_chat_template=True,  # Optional for structured messages; recorded explicitly.
+    system_prompt="Follow the user's request.",
+).fit(model, chat_data)
+```
+
+`CaptureRequest` and learners also accept `chat_template_kwargs`. Template
+settings, the effective capture rendering state, and the tokenizer's template
+hash are recorded in cache/artifact provenance; exact artifact compatibility
+checks a learned template hash when present. Do not mix raw prompts and
+structured conversations in one automatic chat batch; split it or render the
+inputs yourself. Already-tokenized `input_ids` bypass rendering and cannot be
+combined with chat-template options.
 
 ### Sites: choose a model location
 

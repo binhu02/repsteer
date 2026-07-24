@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
@@ -96,6 +97,119 @@ def _batch_size_from_text(value: Any) -> int:
     if isinstance(value, Sequence):
         return len(value)
     return 1
+
+
+def _is_text_batch(value: Any) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (Tensor, bytes, bytearray, Mapping, str))
+        and all(isinstance(item, str) for item in value)
+    )
+
+
+def _is_chat_message(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and "role" in value
+        and "content" in value
+    )
+
+
+def _is_chat_conversation(value: Any) -> bool:
+    """Return whether *value* is one HF-style message or conversation."""
+
+    if _is_chat_message(value):
+        return True
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray, Mapping))
+        and bool(value)
+        and all(_is_chat_message(message) for message in value)
+    )
+
+
+def _is_chat_batch(value: Any) -> bool:
+    """Return whether *value* is a non-empty batch of conversations."""
+
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray, Mapping))
+        and bool(value)
+        and not _is_chat_conversation(value)
+        and all(_is_chat_conversation(conversation) for conversation in value)
+    )
+
+
+def _is_encoded_mapping(value: Any) -> bool:
+    return isinstance(value, Mapping) and any(
+        isinstance(item, Tensor) for item in value.values()
+    )
+
+
+def _normalize_chat_conversation(value: Any) -> list[dict[str, Any]]:
+    """Copy one chat conversation into the shape expected by Transformers.
+
+    A single ``{"role": ..., "content": ...}`` mapping is intentionally
+    accepted as a one-message conversation.  This avoids accidentally iterating
+    its keys when callers use a compact one-turn form.
+    """
+
+    if _is_chat_message(value):
+        source = [value]
+    elif _is_chat_conversation(value):
+        source = list(value)
+    elif isinstance(value, str):
+        source = [{"role": "user", "content": value}]
+    else:
+        raise TypeError(
+            "chat template inputs must be a message mapping, a non-empty "
+            "conversation, or a string prompt"
+        )
+    messages: list[dict[str, Any]] = []
+    for message in source:
+        role = message.get("role")
+        if not isinstance(role, str) or not role:
+            raise TypeError("each chat message requires a non-empty string role")
+        # Do not reduce multimodal content lists to strings: processors and
+        # custom chat templates may need their structured content unchanged.
+        messages.append(dict(message))
+    return messages
+
+
+def _chat_template_options(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("chat_template_kwargs must be a mapping")
+    options = dict(value)
+    reserved = {
+        "tokenize",
+        "add_generation_prompt",
+        "return_tensors",
+        "return_dict",
+        "return_assistant_tokens_mask",
+        "padding",
+        "truncation",
+        "max_length",
+    }
+    conflicts = sorted(str(key) for key in set(options) & reserved)
+    if conflicts:
+        raise TypeError(
+            "chat_template_kwargs cannot override repsteer's rendering options: "
+            f"{conflicts}"
+        )
+    return options
+
+
+@dataclass(frozen=True)
+class _RenderedInputs:
+    """Values passed to an encoder plus whether they came from a chat template."""
+
+    values: tuple[Any, ...]
+    used_chat_template: bool = False
+
+
+_MISSING = object()
 
 
 def _image_cardinality(
@@ -328,11 +442,153 @@ class HFSteerableModel:
 
     __call__ = forward
 
+    def _chat_template_renderer(self, *, prefer_processor: bool) -> Any:
+        """Return the component that can render HF chat messages.
+
+        Text-only calls prefer the tokenizer so rendered text and subsequent
+        tokenization use the same template owner.  Multimodal calls prefer the
+        processor because it can understand structured image content and its
+        native placeholder policy; a tokenizer remains a compatible fallback.
+        """
+
+        candidates = (
+            (self.processor, self.tokenizer)
+            if prefer_processor
+            else (self.tokenizer, self.processor)
+        )
+        for candidate in candidates:
+            if callable(getattr(candidate, "apply_chat_template", None)):
+                return candidate
+        raise MissingOptionalDependencyError(
+            "chat inputs require a tokenizer or processor with "
+            "apply_chat_template"
+        )
+
+    def _render_chat_samples(
+        self,
+        samples: Sequence[Any],
+        *,
+        apply_chat_template: bool | None,
+        add_generation_prompt: bool,
+        system_prompt: str | None,
+        chat_template_kwargs: Mapping[str, Any] | None,
+        prefer_processor: bool = False,
+    ) -> _RenderedInputs:
+        """Render a homogeneous sample batch when chat templating is requested.
+
+        Structured messages activate templates automatically when the flag is
+        ``None``.  A raw string is deliberately left alone in that mode, so an
+        already-rendered legacy prompt is never wrapped a second time.  Setting
+        the flag to ``True`` turns raw strings into one ``user`` message each.
+        """
+
+        values = tuple(samples)
+        if not values:
+            raise TypeError("chat template input batches cannot be empty")
+        if apply_chat_template is not None and not isinstance(
+            apply_chat_template, bool
+        ):
+            raise TypeError("apply_chat_template must be True, False, or None")
+        if system_prompt is not None and not isinstance(system_prompt, str):
+            raise TypeError("system_prompt must be a string or None")
+        if not isinstance(add_generation_prompt, bool):
+            raise TypeError("add_generation_prompt must be a bool")
+
+        options = _chat_template_options(chat_template_kwargs)
+        structured = tuple(_is_chat_conversation(value) for value in values)
+        # An explicitly supplied empty mapping is still a request to enter the
+        # chat-template path; it is useful when callers build kwargs
+        # programmatically and keeps capture/generation semantics identical.
+        configured = system_prompt is not None or chat_template_kwargs is not None
+        if apply_chat_template is False:
+            if any(structured):
+                raise TypeError(
+                    "structured chat messages require apply_chat_template=True "
+                    "or None"
+                )
+            if configured:
+                raise TypeError(
+                    "system_prompt and chat_template_kwargs require "
+                    "apply_chat_template=True"
+                )
+            return _RenderedInputs(values)
+
+        use_template = bool(apply_chat_template) or configured
+        if apply_chat_template is None and any(structured):
+            if not all(structured):
+                raise TypeError(
+                    "a chat-template batch cannot mix structured messages and "
+                    "raw prompts; render all samples explicitly or split the batch"
+                )
+            use_template = True
+        if not use_template:
+            return _RenderedInputs(values)
+
+        renderer = self._chat_template_renderer(prefer_processor=prefer_processor)
+        rendered: list[str] = []
+        for value in values:
+            messages = _normalize_chat_conversation(value)
+            if system_prompt is not None:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    *messages,
+                ]
+            result = renderer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=add_generation_prompt,
+                **options,
+            )
+            if not isinstance(result, str):
+                raise TypeError(
+                    "apply_chat_template(tokenize=False) must return a string; "
+                    f"got {type(result).__name__}"
+                )
+            rendered.append(result)
+        return _RenderedInputs(tuple(rendered), used_chat_template=True)
+
+    def _render_generation_input(
+        self,
+        value: Any,
+        *,
+        add_generation_prompt: bool,
+        system_prompt: str | None,
+        chat_template_kwargs: Mapping[str, Any] | None,
+        prefer_processor: bool,
+    ) -> tuple[Any, bool]:
+        """Render one generation argument and preserve its scalar/batch shape."""
+
+        if _is_chat_conversation(value) or isinstance(value, str):
+            rendered = self._render_chat_samples(
+                [value],
+                apply_chat_template=True,
+                add_generation_prompt=add_generation_prompt,
+                system_prompt=system_prompt,
+                chat_template_kwargs=chat_template_kwargs,
+                prefer_processor=prefer_processor,
+            )
+            return rendered.values[0], True
+        if _is_chat_batch(value) or _is_text_batch(value):
+            rendered = self._render_chat_samples(
+                list(value),
+                apply_chat_template=True,
+                add_generation_prompt=add_generation_prompt,
+                system_prompt=system_prompt,
+                chat_template_kwargs=chat_template_kwargs,
+                prefer_processor=prefer_processor,
+            )
+            return list(rendered.values), True
+        raise TypeError(
+            "chat generation requires a message mapping, a non-empty conversation, "
+            "a batch of conversations, or string prompt(s)"
+        )
+
     def _encode_texts(
         self,
         texts: Any,
         *,
         tokenizer_kwargs: Mapping[str, Any] | None = None,
+        from_chat_template: bool = False,
     ) -> dict[str, Any]:
         if self.tokenizer is None:
             raise MissingOptionalDependencyError(
@@ -341,6 +597,11 @@ class HFSteerableModel:
         options = dict(tokenizer_kwargs or {})
         options.setdefault("return_tensors", "pt")
         options.setdefault("padding", _batch_size_from_text(texts) > 1)
+        if from_chat_template:
+            # HF chat templates ordinarily render their own BOS/EOS/control
+            # tokens.  Re-adding tokenizer defaults here corrupts many
+            # instruction prompts; callers can still explicitly opt in.
+            options.setdefault("add_special_tokens", False)
         if (
             options.get("padding")
             and getattr(self.tokenizer, "pad_token_id", None) is None
@@ -364,6 +625,7 @@ class HFSteerableModel:
         images: Any,
         *,
         processor_kwargs: Mapping[str, Any] | None = None,
+        from_chat_template: bool = False,
     ) -> dict[str, Any]:
         if self.processor is None:
             raise MissingOptionalDependencyError(
@@ -374,6 +636,8 @@ class HFSteerableModel:
         options = dict(processor_kwargs or {})
         options.setdefault("return_tensors", "pt")
         options.setdefault("padding", _batch_size_from_text(texts) > 1)
+        if from_chat_template:
+            options.setdefault("add_special_tokens", False)
         encoded = self.processor(text=texts, images=images, **options)
         if not isinstance(encoded, Mapping):
             try:
@@ -484,7 +748,25 @@ class HFSteerableModel:
     ]:
         tokenizer_kwargs = kwargs.pop("tokenizer_kwargs", None)
         processor_kwargs = kwargs.pop("processor_kwargs", None)
-        prompt = kwargs.pop("prompt", None)
+        prompt = kwargs.pop("prompt", _MISSING)
+        messages = kwargs.pop("messages", _MISSING)
+        apply_chat_template = kwargs.pop("apply_chat_template", None)
+        supplied_generation_prompt = kwargs.pop("add_generation_prompt", _MISSING)
+        system_prompt = kwargs.pop("system_prompt", None)
+        chat_template_kwargs = kwargs.pop("chat_template_kwargs", None)
+        if apply_chat_template is not None and not isinstance(
+            apply_chat_template, bool
+        ):
+            raise TypeError("apply_chat_template must be True, False, or None")
+        if supplied_generation_prompt is not _MISSING and not isinstance(
+            supplied_generation_prompt, bool
+        ):
+            raise TypeError("add_generation_prompt must be a bool")
+        add_generation_prompt = (
+            True
+            if supplied_generation_prompt is _MISSING
+            else supplied_generation_prompt
+        )
         singular_image = kwargs.pop("image", None)
         plural_images = kwargs.pop("images", None)
         if singular_image is not None and plural_images is not None:
@@ -492,32 +774,80 @@ class HFSteerableModel:
         images = plural_images if plural_images is not None else singular_image
         if kwargs.get("video") is not None or kwargs.get("videos") is not None:
             raise NotImplementedError(
-                "repsteer 0.2.0 supports static VLM images, not video modality maps"
+                "repsteer supports static VLM images, not video modality maps"
             )
         values = args
-        if prompt is not None:
+        if prompt is not _MISSING and messages is not _MISSING:
+            raise TypeError("pass either prompt=... or messages=..., not both")
+        if prompt is not _MISSING:
             if values:
                 raise TypeError("prompt was passed both positionally and by keyword")
             values = (prompt,)
+        elif messages is not _MISSING:
+            if values:
+                raise TypeError("messages was passed both positionally and by keyword")
+            values = (messages,)
+
+        chat_rendered = False
+        template_options_supplied = (
+            messages is not _MISSING
+            or apply_chat_template is True
+            or system_prompt is not None
+            or chat_template_kwargs is not None
+            or supplied_generation_prompt is not _MISSING
+        )
+        if values:
+            candidate = values[0]
+            structured = _is_chat_conversation(candidate) or _is_chat_batch(candidate)
+            should_render = structured or template_options_supplied
+            if should_render:
+                if len(values) != 1:
+                    raise TypeError(
+                        "chat generation accepts one prompt, conversation, or "
+                        "prompt/conversation batch argument"
+                    )
+                if apply_chat_template is False:
+                    if structured:
+                        raise TypeError(
+                            "structured chat messages require "
+                            "apply_chat_template=True or None"
+                        )
+                    raise TypeError(
+                        "messages, system_prompt, chat_template_kwargs, and "
+                        "add_generation_prompt require apply_chat_template=True"
+                    )
+                rendered, chat_rendered = self._render_generation_input(
+                    candidate,
+                    add_generation_prompt=add_generation_prompt,
+                    system_prompt=system_prompt,
+                    chat_template_kwargs=chat_template_kwargs,
+                    prefer_processor=images is not None,
+                )
+                values = (rendered,)
+        elif template_options_supplied:
+            raise TypeError(
+                "chat template options require a prompt or messages input; "
+                "encoded input_ids cannot be templated"
+            )
 
         if images is not None:
             if not values or not (
                 isinstance(values[0], str)
-                or (
-                    isinstance(values[0], Sequence)
-                    and not isinstance(values[0], (Tensor, bytes, bytearray, Mapping))
-                    and all(isinstance(item, str) for item in values[0])
-                )
+                or _is_text_batch(values[0])
             ):
                 raise TypeError(
-                    "multimodal generation requires a string prompt or prompt batch"
+                    "multimodal generation requires a string prompt, prompt batch, "
+                    "or chat conversation"
                 )
             if len(values) != 1:
                 raise TypeError(
                     "multimodal generation accepts one prompt or prompt batch argument"
                 )
             encoded = self._encode_multimodal(
-                values[0], images, processor_kwargs=processor_kwargs
+                values[0],
+                images,
+                processor_kwargs=processor_kwargs,
+                from_chat_template=chat_rendered,
             )
             duplicates = set(encoded) & set(kwargs)
             if duplicates:
@@ -529,17 +859,17 @@ class HFSteerableModel:
             values = ()
         elif values and (
             isinstance(values[0], str)
-            or (
-                isinstance(values[0], Sequence)
-                and not isinstance(values[0], (Tensor, bytes, bytearray, Mapping))
-                and all(isinstance(item, str) for item in values[0])
-            )
+            or _is_text_batch(values[0])
         ):
             if len(values) != 1:
                 raise TypeError(
                     "text generation accepts one prompt or prompt batch argument"
                 )
-            encoded = self._encode_texts(values[0], tokenizer_kwargs=tokenizer_kwargs)
+            encoded = self._encode_texts(
+                values[0],
+                tokenizer_kwargs=tokenizer_kwargs,
+                from_chat_template=chat_rendered,
+            )
             duplicates = set(encoded) & set(kwargs)
             if duplicates:
                 raise TypeError(
@@ -631,74 +961,56 @@ class HFSteerableModel:
             text = decoded[0] if len(decoded) == 1 else list(decoded)
         return GenerationResult(text=text, token_ids=sequences, raw=raw)
 
-    def _render_capture_inputs(self, request: Any) -> Any:
-        inputs = list(request.inputs)
-        if (
-            len(inputs) == 1
-            and isinstance(inputs[0], Mapping)
-            and any(isinstance(value, Tensor) for value in inputs[0].values())
-        ):
-            return inputs
-        apply_template = request.apply_chat_template
-        first = inputs[0] if inputs else None
-        structured = bool(
-            isinstance(first, Mapping) and {"role", "content"} <= set(first)
-        ) or bool(
-            isinstance(first, Sequence)
-            and not isinstance(first, (str, bytes, bytearray))
-            and first
-            and isinstance(first[0], Mapping)
-            and {"role", "content"} <= set(first[0])
-        )
-        if not (apply_template is True or (apply_template is None and structured)):
-            return inputs
-        if self.tokenizer is None or not callable(
-            getattr(self.tokenizer, "apply_chat_template", None)
-        ):
-            raise MissingOptionalDependencyError(
-                "chat capture inputs require tokenizer.apply_chat_template"
-            )
-        rendered: list[str] = []
-        for conversation in inputs:
-            messages = conversation
-            if request.system_prompt:
-                if isinstance(messages, Mapping):
-                    messages = [messages]
-                messages = [
-                    {"role": "system", "content": request.system_prompt},
-                    *list(messages),
-                ]
-            rendered.append(
-                self.tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=request.add_generation_prompt,
+    def _render_capture_inputs(self, request: Any) -> _RenderedInputs:
+        inputs = tuple(request.inputs)
+        if len(inputs) == 1 and _is_encoded_mapping(inputs[0]):
+            if (
+                getattr(request, "apply_chat_template", None) is True
+                or getattr(request, "add_generation_prompt", False)
+                or getattr(request, "system_prompt", None) is not None
+                or getattr(request, "chat_template_kwargs", None) is not None
+            ):
+                raise TypeError(
+                    "encoded capture inputs cannot be combined with chat template "
+                    "rendering options"
                 )
-            )
-        return rendered
+            return _RenderedInputs(inputs)
+        return self._render_chat_samples(
+            inputs,
+            apply_chat_template=getattr(request, "apply_chat_template", None),
+            add_generation_prompt=getattr(request, "add_generation_prompt", False),
+            system_prompt=getattr(request, "system_prompt", None),
+            chat_template_kwargs=getattr(request, "chat_template_kwargs", None),
+        )
 
     def _prepare_capture_inputs(
-        self, request: Any, *, rendered_inputs: Any | None = None
+        self,
+        request: Any,
+        *,
+        rendered_inputs: _RenderedInputs | None = None,
     ) -> dict[str, Any]:
-        values = (
+        rendered = (
             self._render_capture_inputs(request)
             if rendered_inputs is None
             else rendered_inputs
         )
-        if (
-            len(values) == 1
-            and isinstance(values[0], Mapping)
-            and any(isinstance(value, Tensor) for value in values[0].values())
-        ):
+        values = rendered.values
+        if len(values) == 1 and _is_encoded_mapping(values[0]):
             return _move_mapping(values[0], self.device)
         tokenizer_kwargs: dict[str, Any] = {}
-        if isinstance(request.special_tokens, bool):
+        if isinstance(request.special_tokens, Mapping):
+            tokenizer_kwargs.update(request.special_tokens)
+        elif isinstance(request.special_tokens, bool):
             tokenizer_kwargs["add_special_tokens"] = request.special_tokens
         needs_offsets = type(request.positions).__name__ == "TextSpan"
         if needs_offsets:
             tokenizer_kwargs["return_offsets_mapping"] = True
         try:
-            return self._encode_texts(values, tokenizer_kwargs=tokenizer_kwargs)
+            return self._encode_texts(
+                values,
+                tokenizer_kwargs=tokenizer_kwargs,
+                from_chat_template=rendered.used_chat_template,
+            )
         except (NotImplementedError, TypeError) as exc:
             if not needs_offsets:
                 raise
@@ -782,10 +1094,8 @@ class HFSteerableModel:
             component=getattr(request.site, "component", None),
         )
         texts = (
-            tuple(rendered_inputs)
-            if isinstance(rendered_inputs, Sequence)
-            and not isinstance(rendered_inputs, (str, bytes, bytearray, Mapping))
-            and all(isinstance(value, str) for value in rendered_inputs)
+            rendered_inputs.values
+            if all(isinstance(value, str) for value in rendered_inputs.values)
             else None
         )
         context = context.with_updates(texts=texts, token_offsets=token_offsets)
@@ -821,6 +1131,7 @@ class HFSteerableModel:
                 "architecture": resolved.architecture_name,
                 "processor_id": self.processor_id,
                 "processor_revision": self.processor_revision,
+                "chat_template_applied": rendered_inputs.used_chat_template,
             },
             pooled=False,
         )

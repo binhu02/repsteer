@@ -30,6 +30,17 @@ class _SweepModel:
         return GenerationResult(text=prompt, token_ids=tokens, raw=tokens)
 
 
+class _ChatSweepModel(_SweepModel):
+    def __init__(self):
+        super().__init__()
+        self.prompts = []
+
+    def generate(self, prompt, **kwargs):
+        self.prompts.append((prompt, kwargs))
+        tokens = torch.arange(2).unsqueeze(0)
+        return GenerationResult(text="chat", token_ids=tokens, raw=tokens)
+
+
 def test_layer_strength_token_policy_sweep_is_machine_readable(tmp_path):
     artifact = DirectionArtifact(
         ArtifactMetadata(
@@ -60,3 +71,32 @@ def test_layer_strength_token_policy_sweep_is_machine_readable(tmp_path):
     report.to_markdown(tmp_path / "sweep.md")
     assert (tmp_path / "sweep.json").is_file()
     assert (tmp_path / "sweep.md").is_file()
+
+
+def test_sweep_passes_a_single_chat_message_as_a_positional_prompt():
+    model = _ChatSweepModel()
+    artifact = DirectionArtifact(
+        ArtifactMetadata(
+            model_id="tiny/sweep",
+            model_revision="r1",
+            site=resid_post(0),
+            method="unit",
+        ),
+        torch.tensor([1.0, 0.0]),
+    )
+    message = {"role": "user", "content": "say hello"}
+
+    report = sweep(
+        model=model,
+        artifact=artifact,
+        data=[message],
+        search=Grid(
+            sites=[resid_post(0)],
+            strengths=[0],
+            positions=[LastPromptToken()],
+        ),
+        metrics=[MeanOutputLength()],
+    )
+
+    assert model.prompts == [(message, {})]
+    assert report.records[0].samples == 1

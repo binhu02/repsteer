@@ -9,6 +9,7 @@ from typing import Any
 
 from repsteer.core.errors import ArtifactCompatibilityError
 from repsteer.core.site import Site
+from repsteer.data import stable_fingerprint
 
 from .base import ArtifactMetadata, SteeringArtifact
 from .processor import processor_metadata
@@ -87,6 +88,32 @@ def _get(value: Any, *names: str) -> Any:
     return None
 
 
+def _first(*values: Any) -> Any:
+    return next((value for value in values if value is not None), None)
+
+
+def _tokenizer_template_hash(target: Any) -> str | None:
+    """Return the stable hash of the template used by an HF wrapper.
+
+    Text models usually expose it on ``tokenizer``.  Some VLM processors own a
+    distinct template, so inspect both the processor and its tokenizer as a
+    compatibility fallback.  Absence remains compatible with legacy artifacts
+    that predate template provenance.
+    """
+
+    tokenizer = _get(target, "tokenizer")
+    processor = _get(target, "processor")
+    processor_tokenizer = _get(processor, "tokenizer")
+    chat_template = _first(
+        _get(tokenizer, "chat_template"),
+        _get(processor, "chat_template"),
+        _get(processor_tokenizer, "chat_template"),
+    )
+    if chat_template is None:
+        return None
+    return str(stable_fingerprint(chat_template)).removeprefix("sha256:")
+
+
 def _target_attributes(target: Any) -> tuple[str, str | None, str | None, int | None]:
     model_id = _get(target, "model_id", "id", "name_or_path")
     revision = _get(target, "revision", "model_revision")
@@ -158,6 +185,7 @@ def check_compatibility(
         target_processor_revision,
         target_preprocess_fingerprint,
     ) = _processor_attributes(target)
+    target_template_hash = _tokenizer_template_hash(target)
     if hidden_size is not None:
         target_hidden = int(hidden_size)
     target_site = site or _get(target, "site")
@@ -242,12 +270,27 @@ def check_compatibility(
                 f"{target_preprocess_fingerprint!r})"
             )
 
+    artifact_template_hash = metadata.tokenizer.get("chat_template_sha256")
+    tokenizer_template_match = True
+    if artifact_template_hash:
+        tokenizer_template_match = bool(
+            target_template_hash
+            and str(artifact_template_hash).removeprefix("sha256:")
+            == target_template_hash
+        )
+        if not tokenizer_template_match:
+            reasons.append(
+                "tokenizer chat template differs "
+                f"({artifact_template_hash!r} != {target_template_hash!r})"
+            )
+
     if (
         dimensions_match
         and sites_match
         and exact_id
         and exact_revision
         and processor_match
+        and tokenizer_template_match
     ):
         level = CompatibilityLevel.EXACT
     elif dimensions_match and sites_match and architecture_match:

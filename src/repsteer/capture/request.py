@@ -27,6 +27,7 @@ class CaptureRequest:
     apply_chat_template: bool | None = None
     add_generation_prompt: bool = False
     system_prompt: str | None = None
+    chat_template_kwargs: Mapping[str, Any] | None = None
     special_tokens: bool | Mapping[str, Any] | None = None
     dtype: str | torch.dtype | None = None
     model_mode: str = "eval"
@@ -39,6 +40,20 @@ class CaptureRequest:
         if not inputs:
             raise ValueError("capture inputs cannot be empty")
         object.__setattr__(self, "inputs", inputs)
+        if self.apply_chat_template is not None and not isinstance(
+            self.apply_chat_template, bool
+        ):
+            raise TypeError("apply_chat_template must be True, False, or None")
+        if not isinstance(self.add_generation_prompt, bool):
+            raise TypeError("add_generation_prompt must be a bool")
+        if self.system_prompt is not None and not isinstance(self.system_prompt, str):
+            raise TypeError("system_prompt must be a string or None")
+        if self.chat_template_kwargs is not None:
+            if not isinstance(self.chat_template_kwargs, Mapping):
+                raise TypeError("chat_template_kwargs must be a mapping or None")
+            object.__setattr__(
+                self, "chat_template_kwargs", dict(self.chat_template_kwargs)
+            )
         if self.batch_size is not None and self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if self.sample_weights is not None:
@@ -78,6 +93,7 @@ class CaptureRequest:
                     "apply_chat_template": self.apply_chat_template,
                     "add_generation_prompt": self.add_generation_prompt,
                     "system_prompt": self.system_prompt,
+                    "chat_template_kwargs": self.chat_template_kwargs,
                     "special_tokens": self.special_tokens,
                 },
                 "dtype": self.dtype,

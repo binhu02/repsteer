@@ -147,7 +147,7 @@ class Qwen2_5_VLAdapter(VisionLanguageAdapter):
             temporal, height, width = map(int, raw_grid)
             if temporal != 1:
                 raise PositionResolutionError(
-                    "repsteer 0.2.0 maps static Qwen2.5-VL images only; "
+                    "repsteer maps static Qwen2.5-VL images only; "
                     f"image_grid_thw[{occurrence}] has temporal size {temporal}"
                 )
             if height <= 0 or width <= 0 or height % merge_size or width % merge_size:

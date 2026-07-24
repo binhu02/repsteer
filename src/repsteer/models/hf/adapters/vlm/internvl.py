@@ -96,7 +96,7 @@ class InternVLAdapter(VisionLanguageAdapter):
         group = round(1.0 / ratio)
         if group <= 0 or abs(ratio * group - 1.0) > 1e-6:
             raise PositionResolutionError(
-                "InternVL 0.2.0 requires downsample_ratio to be the reciprocal "
+                "InternVL support requires downsample_ratio to be the reciprocal "
                 "of a positive integer"
             )
         return int(group)
@@ -143,7 +143,7 @@ class InternVLAdapter(VisionLanguageAdapter):
         )
         if strategy != "default":
             raise PositionResolutionError(
-                "InternVL 0.2.0 modality mapping requires "
+                "InternVL modality mapping requires "
                 "vision_feature_select_strategy='default'"
             )
         patch_height, patch_width = _pair(

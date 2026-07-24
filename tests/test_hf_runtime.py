@@ -4,8 +4,13 @@ import transformers
 
 from repsteer.artifacts import ArtifactMetadata, DirectionArtifact, load_artifact
 from repsteer.capture import CaptureRequest
-from repsteer.core import ArtifactCompatibilityError, HookLifecycleError, Intervention
-from repsteer.data import ContrastivePairs
+from repsteer.core import (
+    ArtifactCompatibilityError,
+    HookLifecycleError,
+    Intervention,
+    MissingOptionalDependencyError,
+)
+from repsteer.data import ContrastivePairs, canonicalize
 from repsteer.learners import DiffMean
 from repsteer.models import from_model, from_pretrained
 from repsteer.operators import Add
@@ -59,6 +64,55 @@ class _Tokenizer:
         return [" ".join(map(str, row.tolist())) for row in sequences]
 
 
+class _ChatTokenizer(_Tokenizer):
+    """Tiny tokenizer fake that makes chat rendering observable in runtime tests."""
+
+    chat_template = "<test-chat-template-v1>"
+
+    def __init__(self):
+        super().__init__()
+        self.template_calls = []
+        self.encode_calls = []
+
+    def apply_chat_template(
+        self,
+        messages,
+        *,
+        tokenize=False,
+        add_generation_prompt=False,
+        **kwargs,
+    ):
+        snapshot = tuple(dict(message) for message in messages)
+        self.template_calls.append(
+            {
+                "messages": snapshot,
+                "tokenize": tokenize,
+                "add_generation_prompt": add_generation_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        rendered = "\n".join(
+            f"<{message['role']}>{message['content']}" for message in snapshot
+        )
+        return f"{rendered}\n<assistant>" if add_generation_prompt else rendered
+
+    def __call__(self, texts, *, return_tensors="pt", padding=False, **kwargs):
+        self.encode_calls.append(
+            {
+                "texts": texts,
+                "return_tensors": return_tensors,
+                "padding": padding,
+                "kwargs": kwargs,
+            }
+        )
+        return super().__call__(
+            texts,
+            return_tensors=return_tensors,
+            padding=padding,
+            **kwargs,
+        )
+
+
 def _wrapper():
     config = transformers.LlamaConfig(
         vocab_size=32,
@@ -73,6 +127,26 @@ def _wrapper():
     )
     raw = transformers.LlamaForCausalLM(config).eval()
     return from_model(raw, _Tokenizer(), model_id="tiny/llama", revision="rev-1")
+
+
+def _chat_wrapper():
+    config = transformers.LlamaConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+    raw = transformers.LlamaForCausalLM(config).eval()
+    tokenizer = _ChatTokenizer()
+    return (
+        from_model(raw, tokenizer, model_id="tiny/llama", revision="rev-1"),
+        tokenizer,
+    )
 
 
 def test_public_dtype_uses_the_transformers_4x_loading_keyword():
@@ -347,3 +421,258 @@ def test_hf_capture_supplies_offsets_for_text_span_selector():
 
     assert result.activations.shape == (2, 1, wrapper.hidden_size)
     assert result.attention_mask.tolist() == [[True], [True]]
+
+
+def test_structured_chat_generate_auto_templates_and_avoids_duplicate_special_tokens():
+    wrapper, tokenizer = _chat_wrapper()
+    messages = [{"role": "user", "content": "kind words"}]
+
+    result = wrapper.generate(messages, max_new_tokens=1, do_sample=False)
+
+    assert result.token_ids.ndim == 2
+    assert tokenizer.template_calls == [
+        {
+            "messages": ({"role": "user", "content": "kind words"},),
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "kwargs": {},
+        }
+    ]
+    assert tokenizer.encode_calls[-1]["texts"] in (
+        "<user>kind words\n<assistant>",
+        ["<user>kind words\n<assistant>"],
+    )
+    assert tokenizer.encode_calls[-1]["kwargs"]["add_special_tokens"] is False
+
+
+def test_raw_prompt_can_explicitly_use_chat_template_with_system_prompt():
+    wrapper, tokenizer = _chat_wrapper()
+
+    wrapper.generate(
+        "kind words",
+        apply_chat_template=True,
+        system_prompt="Answer helpfully.",
+        max_new_tokens=1,
+        do_sample=False,
+    )
+
+    assert tokenizer.template_calls == [
+        {
+            "messages": (
+                {"role": "system", "content": "Answer helpfully."},
+                {"role": "user", "content": "kind words"},
+            ),
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "kwargs": {},
+        }
+    ]
+    assert tokenizer.encode_calls[-1]["kwargs"]["add_special_tokens"] is False
+
+
+def test_structured_chat_generate_requires_a_chat_template():
+    wrapper = _wrapper()
+
+    with pytest.raises(MissingOptionalDependencyError, match="apply_chat_template"):
+        wrapper.generate(
+            [{"role": "user", "content": "kind words"}],
+            max_new_tokens=1,
+            do_sample=False,
+        )
+
+
+def test_capture_templates_single_and_batched_chat_inputs():
+    wrapper, tokenizer = _chat_wrapper()
+    single = wrapper.capture(
+        CaptureRequest(
+            inputs=[{"role": "user", "content": "kind words"}],
+            site=resid_post(0),
+            positions=LastNonPaddingToken(),
+            system_prompt="Answer helpfully.",
+        )
+    )
+
+    assert single.activations.shape == (1, 1, wrapper.hidden_size)
+    assert tokenizer.template_calls == [
+        {
+            "messages": (
+                {"role": "system", "content": "Answer helpfully."},
+                {"role": "user", "content": "kind words"},
+            ),
+            "tokenize": False,
+            "add_generation_prompt": False,
+            "kwargs": {},
+        }
+    ]
+    assert tokenizer.encode_calls[-1]["kwargs"]["add_special_tokens"] is False
+
+    tokenizer.template_calls.clear()
+    batched = wrapper.capture(
+        CaptureRequest(
+            inputs=[
+                [{"role": "user", "content": "kind words"}],
+                [{"role": "user", "content": "cruel words"}],
+            ],
+            site=resid_post(0),
+            positions=LastNonPaddingToken(),
+        )
+    )
+
+    assert batched.activations.shape == (2, 1, wrapper.hidden_size)
+    assert [call["messages"] for call in tokenizer.template_calls] == [
+        ({"role": "user", "content": "kind words"},),
+        ({"role": "user", "content": "cruel words"},),
+    ]
+    assert all(
+        call["add_generation_prompt"] is False
+        for call in tokenizer.template_calls
+    )
+
+
+def test_chat_learner_forwards_rendering_configuration_and_template_metadata():
+    wrapper, tokenizer = _chat_wrapper()
+    data = ContrastivePairs.from_records(
+        [
+            {
+                "positive_messages": [
+                    {"role": "user", "content": "kind words"}
+                ],
+                "negative_messages": [
+                    {"role": "user", "content": "cruel words"}
+                ],
+            }
+        ]
+    )
+
+    artifact = DiffMean(
+        site=resid_post(0),
+        positions=LastNonPaddingToken(),
+        apply_chat_template=True,
+        add_generation_prompt=True,
+        system_prompt="Answer helpfully.",
+    ).fit(wrapper, data)
+
+    assert data.is_chat
+    assert len(tokenizer.template_calls) == 2
+    assert all(
+        call["messages"][0] == {"role": "system", "content": "Answer helpfully."}
+        and call["add_generation_prompt"] is True
+        for call in tokenizer.template_calls
+    )
+    rendering = artifact.metadata.config["rendering"]
+    assert rendering["apply_chat_template"] is True
+    assert rendering["add_generation_prompt"] is True
+    assert rendering["system_prompt"] == "Answer helpfully."
+    assert "chat_template_sha256" in artifact.metadata.tokenizer
+
+
+def test_messages_keyword_renders_each_chat_in_a_padded_batch():
+    wrapper, tokenizer = _chat_wrapper()
+    conversations = [
+        [{"role": "user", "content": "kind words"}],
+        [{"role": "user", "content": "help people"}],
+    ]
+
+    result = wrapper.generate(
+        messages=conversations,
+        max_new_tokens=1,
+        do_sample=False,
+    )
+
+    assert result.token_ids.shape[0] == 2
+    assert [call["messages"] for call in tokenizer.template_calls] == [
+        ({"role": "user", "content": "kind words"},),
+        ({"role": "user", "content": "help people"},),
+    ]
+    assert all(
+        call["add_generation_prompt"] is True for call in tokenizer.template_calls
+    )
+    assert tokenizer.encode_calls[-1]["texts"] == [
+        "<user>kind words\n<assistant>",
+        "<user>help people\n<assistant>",
+    ]
+    assert tokenizer.encode_calls[-1]["padding"] is True
+
+
+def test_chat_template_kwargs_reach_renderer_and_are_recorded_in_provenance():
+    wrapper, tokenizer = _chat_wrapper()
+    messages = [{"role": "user", "content": "kind words"}]
+    template_kwargs = {"template_mode": "unit-test"}
+    request = CaptureRequest(
+        inputs=[messages],
+        site=resid_post(0),
+        positions=LastNonPaddingToken(),
+        chat_template_kwargs=template_kwargs,
+    )
+    changed_request = CaptureRequest(
+        inputs=[messages],
+        site=resid_post(0),
+        positions=LastNonPaddingToken(),
+        chat_template_kwargs={"template_mode": "different"},
+    )
+
+    assert request.fingerprint != changed_request.fingerprint
+    wrapper.capture(request)
+    assert tokenizer.template_calls[-1]["kwargs"] == template_kwargs
+
+    tokenizer.template_calls.clear()
+    data = ContrastivePairs.from_records(
+        [
+            {
+                "positive_messages": messages,
+                "negative_messages": [
+                    {"role": "user", "content": "cruel words"}
+                ],
+            }
+        ]
+    )
+    artifact = DiffMean(
+        site=resid_post(0),
+        positions=LastNonPaddingToken(),
+        chat_template_kwargs=template_kwargs,
+    ).fit(wrapper, data)
+
+    assert [call["kwargs"] for call in tokenizer.template_calls] == [
+        template_kwargs,
+        template_kwargs,
+    ]
+    serialized = artifact.metadata.to_dict()
+    rendering = serialized["config"]["rendering"]
+    assert rendering["chat_template_kwargs"] == canonicalize(template_kwargs)
+    provenance = serialized["provenance"]["capture"]["rendering"]
+    assert provenance["chat_template_kwargs"] == canonicalize(template_kwargs)
+
+
+def test_structured_messages_cannot_disable_chat_templating():
+    wrapper, _ = _chat_wrapper()
+    messages = [{"role": "user", "content": "kind words"}]
+
+    with pytest.raises(TypeError, match="structured chat messages require"):
+        wrapper.generate(
+            messages,
+            apply_chat_template=False,
+            max_new_tokens=1,
+            do_sample=False,
+        )
+    with pytest.raises(TypeError, match="structured chat messages require"):
+        wrapper.capture(
+            CaptureRequest(
+                inputs=[messages],
+                site=resid_post(0),
+                positions=LastNonPaddingToken(),
+                apply_chat_template=False,
+            )
+        )
+
+
+def test_explicit_tokenizer_special_tokens_override_chat_safe_default():
+    wrapper, tokenizer = _chat_wrapper()
+
+    wrapper.generate(
+        [{"role": "user", "content": "kind words"}],
+        tokenizer_kwargs={"add_special_tokens": True},
+        max_new_tokens=1,
+        do_sample=False,
+    )
+
+    assert tokenizer.encode_calls[-1]["kwargs"]["add_special_tokens"] is True

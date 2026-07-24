@@ -48,6 +48,27 @@ class _TokenProcessor(_Processor):
         }
 
 
+class _ChatTokenProcessor(_TokenProcessor):
+    def __init__(self, image_token):
+        super().__init__(image_token)
+        self.template_calls = []
+
+    def apply_chat_template(
+        self, messages, *, tokenize=False, add_generation_prompt=False, **kwargs
+    ):
+        self.template_calls.append(
+            {
+                "messages": tuple(dict(message) for message in messages),
+                "tokenize": tokenize,
+                "add_generation_prompt": add_generation_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        content = "|".join(str(message["content"]) for message in messages)
+        suffix = "<assistant>" if add_generation_prompt else ""
+        return f"<user>{content}{self.image_token}{suffix}"
+
+
 class _Model(nn.Module):
     def __init__(self):
         super().__init__()
@@ -199,6 +220,37 @@ def test_builtin_vlm_explicit_placeholders_validate_image_cardinality():
             [f"{token}{token} first", "second"],
             [[images[0]], [images[1]]],
         )
+
+
+def test_instruction_vlm_messages_prefer_processor_template_before_processing():
+    token = "<|image_pad|>"
+    processor = _ChatTokenProcessor(token)
+    raw = _Model()
+    wrapper = HFSteerableModel(
+        raw,
+        processor=processor,
+        adapter=_NamedVLMAdapter("qwen2_5_vl"),
+        model_id="tiny/vlm",
+        revision="r1",
+    )
+
+    wrapper.generate(
+        messages=[{"role": "user", "content": "describe this image"}],
+        image=torch.zeros(3, 2, 2),
+        max_new_tokens=1,
+    )
+
+    assert processor.template_calls == [
+        {
+            "messages": ({"role": "user", "content": "describe this image"},),
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "kwargs": {},
+        }
+    ]
+    text, _images, options = processor.calls[-1]
+    assert text == f"<user>describe this image{token}<assistant>"
+    assert options["add_special_tokens"] is False
 
 
 def test_processor_revision_mismatch_fails_closed():

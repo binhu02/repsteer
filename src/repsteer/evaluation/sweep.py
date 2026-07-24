@@ -129,11 +129,21 @@ def _fresh_metric(metric: Any, model: Any) -> Any:
 
 
 def _generate_sample(model: Any, sample: Any, kwargs: Mapping[str, Any]) -> Any:
+    # A single chat message is a prompt payload, not a mapping of generate()
+    # keyword arguments.  Conversations represented as lists already take the
+    # positional branch below; this special case keeps the compact one-message
+    # form consistent with the model wrapper's chat API.
+    if _is_chat_message(sample):
+        return model.generate(sample, **kwargs)
     if isinstance(sample, Mapping):
         merged = dict(sample)
         merged.update(kwargs)
         return model.generate(**merged)
     return model.generate(sample, **kwargs)
+
+
+def _is_chat_message(value: Any) -> bool:
+    return isinstance(value, Mapping) and "role" in value and "content" in value
 
 
 def _selector_phase(selector: Any) -> Literal["prefill", "decode", "both"]:

@@ -45,6 +45,7 @@ class ContrastiveLearner:
     apply_chat_template: bool | None = None
     add_generation_prompt: bool = False
     system_prompt: str | None = None
+    chat_template_kwargs: Mapping[str, Any] | None = None
     special_tokens: bool | Mapping[str, Any] | None = None
     capture_dtype: str | torch.dtype | None = None
 
@@ -52,6 +53,18 @@ class ContrastiveLearner:
 
     def __post_init__(self) -> None:
         self.seed = int(self.seed)
+        if self.apply_chat_template is not None and not isinstance(
+            self.apply_chat_template, bool
+        ):
+            raise TypeError("apply_chat_template must be True, False, or None")
+        if not isinstance(self.add_generation_prompt, bool):
+            raise TypeError("add_generation_prompt must be a bool")
+        if self.system_prompt is not None and not isinstance(self.system_prompt, str):
+            raise TypeError("system_prompt must be a string or None")
+        if self.chat_template_kwargs is not None:
+            if not isinstance(self.chat_template_kwargs, Mapping):
+                raise TypeError("chat_template_kwargs must be a mapping or None")
+            self.chat_template_kwargs = dict(self.chat_template_kwargs)
         if self.batch_size is not None and self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
 
@@ -69,9 +82,10 @@ class ContrastiveLearner:
             "pooling": self.pooling,
             "batch_size": self.batch_size,
             "dataset_fingerprint": str(data.fingerprint),
-            "apply_chat_template": self.apply_chat_template,
+            "apply_chat_template": self._resolved_apply_chat_template(data),
             "add_generation_prompt": self.add_generation_prompt,
             "system_prompt": self.system_prompt,
+            "chat_template_kwargs": self.chat_template_kwargs,
             "special_tokens": self.special_tokens,
             "dtype": self.capture_dtype,
             "seed": self.seed,
@@ -93,7 +107,20 @@ class ContrastiveLearner:
             capture_activations(model, negative_request, store=store),
         )
 
-    def _capture_config(self) -> dict[str, Any]:
+    def _resolved_apply_chat_template(
+        self, data: ContrastivePairs | None = None
+    ) -> bool | None:
+        """Record the effective rendering choice instead of an ambiguous auto flag."""
+
+        if self.apply_chat_template is not None:
+            return self.apply_chat_template
+        if self.system_prompt is not None or self.chat_template_kwargs is not None:
+            return True
+        if data is not None:
+            return data.is_chat
+        return None
+
+    def _capture_config(self, data: ContrastivePairs | None = None) -> dict[str, Any]:
         return {
             "site": _description(self.site),
             "positions": _description(self.positions),
@@ -107,9 +134,11 @@ class ContrastiveLearner:
                 else None
             ),
             "rendering": {
-                "apply_chat_template": self.apply_chat_template,
+                "apply_chat_template": self._resolved_apply_chat_template(data),
+                "requested_apply_chat_template": self.apply_chat_template,
                 "add_generation_prompt": self.add_generation_prompt,
                 "system_prompt": self.system_prompt,
+                "chat_template_kwargs": _description(self.chat_template_kwargs),
                 "special_tokens": _description(self.special_tokens),
             },
         }
@@ -218,10 +247,10 @@ def artifact_metadata(
         getattr(model_config, "model_type", None),
         type(model).__qualname__,
     )
-    config = learner._capture_config()
+    config = learner._capture_config(data)
     config.update(dict(extra_config or {}))
     provenance = {
-        "capture": learner._capture_config(),
+        "capture": learner._capture_config(data),
         "dataset": {
             "type": type(data).__qualname__,
             "paired": data.paired,
@@ -299,7 +328,14 @@ def _tokenizer_metadata(
         "id": str(tokenizer_id),
         "revision": None if tokenizer_revision is None else str(tokenizer_revision),
     }
-    chat_template = getattr(tokenizer, "chat_template", None)
+    # Text models usually own the template on the tokenizer, while some VLM
+    # processors own a distinct multimodal template.  Record the renderer that
+    # would actually be selected as far as metadata makes that observable.
+    processor = getattr(model, "processor", None)
+    chat_template = _first(
+        getattr(tokenizer, "chat_template", None),
+        getattr(processor, "chat_template", None),
+    )
     if chat_template is not None:
         result["chat_template_sha256"] = str(
             stable_fingerprint(chat_template)

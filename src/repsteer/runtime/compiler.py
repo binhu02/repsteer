@@ -229,7 +229,7 @@ def compile_plan(
             rendered = ", ".join(str(value) for value in gate_sites)
             raise PlanCompilationError(
                 f"intervention {declaration_index} combines activation gates at "
-                f"multiple sites ({rendered}); 0.2.0 sequence gates require one "
+                f"multiple sites ({rendered}); sequence gates require one "
                 "shared prefill evaluation site"
             )
         gate_site = None
@@ -238,7 +238,7 @@ def compile_plan(
             if getattr(gate_semantic_site, "stream", None) != "language":
                 raise PlanCompilationError(
                     f"intervention {declaration_index} evaluates a cached sequence "
-                    f"gate at {gate_semantic_site}; 0.2.0 supports evaluate_at only "
+                    f"gate at {gate_semantic_site}; evaluate_at is supported only "
                     "on the language stream because vision/projector batches do not "
                     "map one-to-one to language batch items"
                 )

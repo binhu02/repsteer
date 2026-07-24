@@ -18,6 +18,7 @@ from repsteer.core import (
     SiteResolutionError,
     UnsafeArtifactError,
 )
+from repsteer.data import stable_fingerprint
 
 
 class _Target:
@@ -225,4 +226,56 @@ def test_exact_processor_compatibility_includes_preprocessing_fingerprint():
     target.processor_revision = "processor-r1"
 
     with pytest.raises(ArtifactCompatibilityError, match="preprocessing differs"):
+        artifact.bind(target)
+
+
+def test_processor_chat_template_participates_in_exact_compatibility():
+    class Tokenizer:
+        def __init__(self, template):
+            self.chat_template = template
+
+    class Processor:
+        name_or_path = "tiny/processor"
+        _commit_hash = "processor-r1"
+
+        def __init__(self, template):
+            self.tokenizer = Tokenizer(template)
+
+    source = _Target()
+    source.processor = Processor("<chat-v1>")
+    source.processor_id = "tiny/processor"
+    source.processor_revision = "processor-r1"
+    artifact = _artifact().with_metadata(
+        _artifact().metadata.with_updates(processor=processor_metadata(source))
+    )
+    target = _Target()
+    target.processor = Processor("<chat-v2>")
+    target.processor_id = "tiny/processor"
+    target.processor_revision = "processor-r1"
+
+    with pytest.raises(ArtifactCompatibilityError, match="preprocessing differs"):
+        artifact.bind(target)
+
+
+def test_text_tokenizer_chat_template_participates_in_exact_compatibility():
+    class Tokenizer:
+        def __init__(self, template):
+            self.chat_template = template
+
+    source = _Target()
+    source.tokenizer = Tokenizer("<chat-v1>")
+    template_hash = str(stable_fingerprint(source.tokenizer.chat_template)).removeprefix(
+        "sha256:"
+    )
+    artifact = _artifact().with_metadata(
+        _artifact().metadata.with_updates(
+            tokenizer={"chat_template_sha256": template_hash}
+        )
+    )
+    target = _Target()
+    target.tokenizer = Tokenizer("<chat-v1>")
+
+    artifact.bind(target)
+    target.tokenizer = Tokenizer("<chat-v2>")
+    with pytest.raises(ArtifactCompatibilityError, match="chat template differs"):
         artifact.bind(target)

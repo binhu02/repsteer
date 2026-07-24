@@ -55,6 +55,7 @@ def processor_metadata(target: Any) -> dict[str, Any]:
         init_kwargs.get("revision"),
     )
     image_processor = _get(processor, "image_processor")
+    tokenizer = _get(processor, "tokenizer")
     preprocessing: dict[str, Any] = {
         "processor_type": type(processor).__qualname__,
         "image_processor_type": (
@@ -71,6 +72,11 @@ def processor_metadata(target: Any) -> dict[str, Any]:
             value = _get(owner, name)
             if value is not None:
                 preprocessing[f"{owner_name}.{name}"] = canonicalize(value)
+    chat_template = _first(
+        _get(processor, "chat_template"), _get(tokenizer, "chat_template")
+    )
+    if chat_template is not None:
+        preprocessing["chat_template_sha256"] = str(stable_fingerprint(chat_template))
     return {
         "id": str(identifier),
         "revision": None if revision is None else str(revision),
