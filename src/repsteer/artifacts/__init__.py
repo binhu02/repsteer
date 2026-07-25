@@ -9,6 +9,14 @@ from .base import (
     SteeringArtifact,
     SubspaceArtifact,
 )
+from .bundle import (
+    ArtifactBundle,
+    ArtifactBundleComponent,
+    BundleCompatibilityResult,
+    load_artifact_bundle,
+    save_artifact_bundle,
+    verify_bundle_checksums,
+)
 from .compatibility import (
     CompatibilityLevel,
     CompatibilityResult,
@@ -19,10 +27,13 @@ from .io import load_artifact, save_artifact, verify_artifact_checksums
 
 __all__ = [
     "Artifact",
+    "ArtifactBundle",
+    "ArtifactBundleComponent",
     "ArtifactMetadata",
     "CompatibilityLevel",
     "CompatibilityResult",
     "DirectionArtifact",
+    "BundleCompatibilityResult",
     "ProbeArtifact",
     "SAEFeatureArtifact",
     "SteeringArtifact",
@@ -30,6 +41,9 @@ __all__ = [
     "assert_compatible",
     "check_compatibility",
     "load_artifact",
+    "load_artifact_bundle",
     "save_artifact",
+    "save_artifact_bundle",
     "verify_artifact_checksums",
+    "verify_bundle_checksums",
 ]

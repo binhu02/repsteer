@@ -1,5 +1,6 @@
 from .base import SteerableModel
 from .hf import (
+    AdapterCapabilities,
     AdapterRegistry,
     ArchitectureAdapter,
     GemmaAdapter,
@@ -8,11 +9,13 @@ from .hf import (
     LlamaAdapter,
     MistralAdapter,
     ModalityMap,
+    ModalityMappingCapability,
     Qwen2_5_VLAdapter,
     Qwen2Adapter,
     Qwen2VLAdapter,
     Qwen25VLAdapter,
     ResolvedSite,
+    SampleMappingCapability,
     get_adapter,
     register_adapter,
     registered_adapters,
@@ -21,6 +24,7 @@ from .hf.model import from_model, from_pretrained
 from .outputs import GenerationResult
 
 __all__ = [
+    "AdapterCapabilities",
     "AdapterRegistry",
     "ArchitectureAdapter",
     "GenerationResult",
@@ -29,12 +33,14 @@ __all__ = [
     "InternVLAdapter",
     "LlamaAdapter",
     "MistralAdapter",
+    "ModalityMappingCapability",
     "ModalityMap",
     "Qwen25VLAdapter",
     "Qwen2Adapter",
     "Qwen2VLAdapter",
     "Qwen2_5_VLAdapter",
     "ResolvedSite",
+    "SampleMappingCapability",
     "SteerableModel",
     "from_model",
     "from_pretrained",

@@ -99,7 +99,7 @@ This example downloads a model and therefore needs appropriate model access, net
 
 ### 1. Reuse a saved artifact
 
-An artifact bundle is a directory containing a JSON manifest, `safetensors` tensors, and SHA-256 checksums. Loading verifies integrity by default.
+An artifact directory contains a JSON manifest, `safetensors` tensors, and SHA-256 checksums. Loading verifies integrity by default.
 
 ```python
 import repsteer as rs
@@ -550,6 +550,92 @@ report.to_json("reports/sweep.json")
 
 Related APIs include `rs.evaluation.CallableMetric`, `ContainsText`, `MeanOutputLength`, and `SweepReport`. VLM experiments can use `EvaluationMetricGroups`, `MultimodalEvaluationRecord`, and `MultimodalEvaluationReport` to record representation, causal-behavior, and capability/quality measurements separately.
 
+### Deterministic held-out selection
+
+`rs.selection` is a small, model-free configuration substrate: it splits stable
+record IDs, evaluates already-defined candidates, and records a replayable
+selection decision. It does not load a model, run generation, capture
+activations, or train a learner.
+
+```python
+split = rs.selection.make_holdout_split(
+    ["example-0", "example-1", "example-2", "example-3"],
+    validation_ratio=0.5,
+    seed=17,
+    source_fingerprint="sha256:dataset-records",
+)
+candidates = [
+    rs.selection.Candidate(
+        "greater_0.25", {"threshold": 0.25, "comparator": "greater"}
+    ),
+    rs.selection.Candidate("less_0.25", {"threshold": 0.25, "comparator": "less"}),
+]
+
+report = rs.selection.grid_search(
+    candidates,
+    evaluator=lambda candidate: {
+        "f1": evaluate_threshold(candidate, split.validation_ids)
+    },
+    objective="f1",
+    split=split,
+    seed=17,
+)
+print(report.selected_id)
+report.to_json("reports/selection.json")
+```
+
+Candidate parameters and metric values are finite JSON data only. Selection
+uses the declared objective, optional declared secondary metrics, and a final
+canonical candidate-ID tie-break; all candidate metrics remain in the
+checksummed `SelectionReport`. An auditable report always retains either the
+explicit split or its fingerprint, plus a source fingerprint; use `select_best`
+directly for an in-memory comparison that does not need a report.
+
+### Role-keyed artifact bundles
+
+`ArtifactBundle` groups independently valid artifacts by a stable key and
+semantic role. Each component still uses the normal artifact manifest,
+`safetensors`, checksum, and compatibility contract; loading validates both the
+component and bundle digests.
+
+```python
+bundle = rs.artifacts.ArtifactBundle(
+    components=(
+        rs.artifacts.ArtifactBundleComponent(
+            "condition/layer_12", "condition", condition_artifact
+        ),
+        rs.artifacts.ArtifactBundleComponent(
+            "behavior/layer_16", "behavior", behavior_artifact
+        ),
+    ),
+    selection_report=report,
+)
+bundle.save("artifacts/condition_behavior")
+loaded = rs.artifacts.load_artifact_bundle("artifacts/condition_behavior")
+loaded.bind(model)  # Checks every component at the requested compatibility level.
+```
+
+This is generic storage and provenance infrastructure, not a reproduction of a
+method. In particular, a condition/behavior bundle does not provide a CAST
+learner, recipe, or generation behavior.
+
+### Adapter surface capabilities
+
+Adapters expose a versioned, read-only declaration of the representation
+surfaces they actually resolve and test:
+
+```python
+capabilities = model.adapter.capabilities
+print(capabilities.explain())
+capabilities.require("residual_write")
+```
+
+Built-in text adapters declare their residual read/write and language
+sample-mapping contracts. Built-in VLM adapters separately declare their
+static-image modality-map contract; this does not widen language target-row
+mapping to vision or projector targets. `head_result` and `attention_bias` are
+explicitly unsupported for every built-in adapter.
+
 ## Compatibility evidence
 
 Adapter resolution and a successful public-checkpoint run are different claims.
@@ -558,8 +644,8 @@ claims a public checkpoint, CUDA, or multi-GPU validation.
 
 | Model family | Adapter capability | Checkpoint/revision | Validation level | Notes |
 | --- | --- | --- | --- | --- |
-| Gemma2, Llama, Mistral, Qwen2 | Language residual/attention/MLP semantic sites | Local tiny Transformers configs | adapter contract tested | CPU unit contracts validate site read/rebuild behavior. |
-| Qwen2.5-VL, InternVL | Language, vision-residual, projector input/output sites | Local fake structural contracts | adapter contract tested | Static-image mapping contracts only; no public VLM checkpoint smoke test. |
+| Gemma2, Llama, Mistral, Qwen2 | Language residual/attention/MLP semantic sites and residual capability declaration | Local tiny Transformers configs | adapter contract tested | CPU unit contracts validate site read/rebuild behavior. |
+| Qwen2.5-VL, InternVL | Language, vision-residual, projector input/output sites and static-image modality-map declaration | Local fake structural contracts | adapter contract tested | Static-image mapping contracts only; no public VLM checkpoint smoke test. |
 
 ## Runtime boundaries
 
@@ -571,7 +657,12 @@ claims a public checkpoint, CUDA, or multi-GPU validation.
 - Only eager Hugging Face runtime is supported.
 - Quantized/offloaded target modules, model-parallel steering, video/audio, unlisted VLM architectures, and the VLM fusion stream are unsupported.
 - Current built-in adapters do not support `head_out`, `logits`, or unit/head-level interventions.
+- `head_result` and `attention_bias` capability surfaces are explicitly unsupported; no head hook, attention hook, or generation mode was added in 0.4.0.
 - Dynamic recomputation of sequence gates during decode and re-entrant/checkpointed activation capture are unsupported.
+- CAST, ITI, and PASTA have no stable learner, recipe, or runtime implementation.
+  The 0.4.0 selection and bundle infrastructure is not a method reproduction.
+- Adapter contract tests are not public-checkpoint validation. No new public
+  checkpoint, CUDA, remote API, or benchmark dependency was added.
 - Validate artifact compatibility, direction sign, layer choice, strength, processor mapping, and task metrics for every experiment. This library does not replace safety, bias, or effectiveness evaluation.
 
 ## Development

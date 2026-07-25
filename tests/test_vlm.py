@@ -205,13 +205,26 @@ def test_vlm_architecture_contract_without_transformers(
     model = model_factory()
     adapter = get_adapter(model)
     assert isinstance(adapter, adapter_type)
+    language_sites = {
+        "language.resid_pre": sites.resid_pre(0),
+        "language.attn_out": sites.attn_out(0),
+        "language.resid_mid": sites.resid_mid(0),
+        "language.mlp_out": sites.mlp_out(0),
+        "language.resid_post": sites.resid_post(0),
+    }
     declared = {
-        "language": adapter.resolve(model, sites.resid_post(0)),
+        **{name: adapter.resolve(model, site) for name, site in language_sites.items()},
         "vision": adapter.resolve(model, sites.vision_resid(0)),
         "projector_in": adapter.resolve(model, sites.projector_in()),
         "projector_out": adapter.resolve(model, sites.projector_out()),
     }
-    assert declared["language"].hidden_dim == 8
+    assert set(adapter.capabilities.residual_sites) == {
+        *language_sites,
+        "vision.vision_resid",
+        "projector.projector_in",
+        "projector.projector_out",
+    }
+    assert all(declared[name].hidden_dim == 8 for name in language_sites)
     assert declared["vision"].hidden_dim == 4
     assert declared["projector_out"].hidden_dim == 8
     assert declared["projector_in"].hook_kind == "forward_pre"
@@ -248,7 +261,7 @@ def test_vlm_architecture_contract_without_transformers(
             handle.remove()
 
     assert output.shape == (1, 6, 8)
-    assert seen["language"] == (1, 6, 8)
+    assert all(seen[name] == (1, 6, 8) for name in language_sites)
     assert seen["vision"] == vision_shape
     assert seen["projector_in"] == projector_shapes[0]
     assert seen["projector_out"] == projector_shapes[1]

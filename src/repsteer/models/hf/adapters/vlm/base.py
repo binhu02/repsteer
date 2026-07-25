@@ -15,6 +15,7 @@ from ..base import (
     TensorAccessor,
     _site_error,
 )
+from ..capabilities import AdapterCapabilities, ModalityMappingCapability
 
 
 def resolve_attribute_path(
@@ -43,6 +44,33 @@ class VisionLanguageAdapter(DecoderOnlyAdapter):
     language_layer_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
     vision_layer_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
     projector_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declare tested VLM residual and adapter modality-map contracts.
+
+        The mapping contract remains language-target-only for cached sequence
+        decisions.  Vision/projector ``ModalityMap`` support is declared
+        separately and must not be mistaken for target-row-to-sample mapping.
+        """
+
+        text_capabilities = super().capabilities
+        return AdapterCapabilities(
+            adapter_name=self.architecture_name,
+            residual_sites=(
+                *text_capabilities.residual_sites,
+                "vision.vision_resid",
+                "projector.projector_in",
+                "projector.projector_out",
+            ),
+            supports_residual_read=True,
+            supports_residual_write=True,
+            sample_mapping=text_capabilities.sample_mapping,
+            modality_mapping=ModalityMappingCapability(
+                streams=("vision", "projector", "language"),
+                contract=f"{self.architecture_name}_modality_map_static_images",
+            ),
+        )
 
     def supports(self, model: nn.Module) -> bool:
         config = getattr(model, "config", None)

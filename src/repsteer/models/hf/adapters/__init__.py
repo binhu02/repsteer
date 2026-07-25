@@ -6,6 +6,11 @@ from .base import (
     RootOrFirstTensorAccessor,
     TensorAccessor,
 )
+from .capabilities import (
+    AdapterCapabilities,
+    ModalityMappingCapability,
+    SampleMappingCapability,
+)
 from .gemma import GemmaAdapter
 from .llama import LlamaAdapter
 from .mistral import MistralAdapter
@@ -27,6 +32,7 @@ from .vlm import (
 )
 
 __all__ = [
+    "AdapterCapabilities",
     "AdapterRegistry",
     "ArchitectureAdapter",
     "DEFAULT_ADAPTER_REGISTRY",
@@ -35,6 +41,7 @@ __all__ = [
     "InternVLAdapter",
     "LlamaAdapter",
     "MistralAdapter",
+    "ModalityMappingCapability",
     "ModalityMap",
     "PathTensorAccessor",
     "Qwen2Adapter",
@@ -45,6 +52,7 @@ __all__ = [
     "RootOrFirstTensorAccessor",
     "SequenceLayout",
     "TensorAccessor",
+    "SampleMappingCapability",
     "get_adapter",
     "register_adapter",
     "registered_adapters",

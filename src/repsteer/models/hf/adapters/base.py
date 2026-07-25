@@ -8,6 +8,8 @@ from typing import Any, Literal, Protocol, cast
 
 from torch import Tensor, nn
 
+from .capabilities import AdapterCapabilities, SampleMappingCapability
+
 
 def _site_error(message: str) -> Exception:
     try:
@@ -225,6 +227,16 @@ class ResolvedSite:
 class ArchitectureAdapter(ABC):
     architecture_name = "unknown"
 
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Return a fail-closed declaration for adapter-owned surfaces.
+
+        Custom adapters inherit an intentionally empty declaration until they
+        override it with a tested representation contract.
+        """
+
+        return AdapterCapabilities(adapter_name=self.architecture_name)
+
     @abstractmethod
     def supports(self, model: nn.Module) -> bool:
         raise NotImplementedError
@@ -289,6 +301,33 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
         "mlp_out": "output",
         "resid_post": "output",
     }
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """Declare the tested residual and language sample-mapping contracts."""
+
+        ordered_components = (
+            "resid_pre",
+            "attn_out",
+            "resid_mid",
+            "mlp_out",
+            "resid_post",
+        )
+        return AdapterCapabilities(
+            adapter_name=self.architecture_name,
+            residual_sites=tuple(
+                f"language.{component}"
+                for component in ordered_components
+                if component in self.supported_components
+            ),
+            supports_residual_read=True,
+            supports_residual_write=True,
+            sample_mapping=SampleMappingCapability(
+                condition_streams=("language",),
+                target_streams=("language",),
+                contract="language_batch_rows",
+            ),
+        )
 
     def supports(self, model: nn.Module) -> bool:
         model_type = str(

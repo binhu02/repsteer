@@ -15,10 +15,13 @@ from repsteer import (
     recipes,
     sae,
     schedules,
+    selection,
     sites,
 )
 from repsteer._version import __version__
 from repsteer.artifacts import (
+    ArtifactBundle,
+    ArtifactBundleComponent,
     ArtifactMetadata,
     CompatibilityLevel,
     DirectionArtifact,
@@ -39,6 +42,8 @@ from repsteer.core import (
 
 __all__ = [
     "RepSteerError",
+    "ArtifactBundle",
+    "ArtifactBundleComponent",
     "ArtifactMetadata",
     "CompatibilityLevel",
     "DirectionArtifact",
@@ -67,5 +72,6 @@ __all__ = [
     "recipes",
     "sae",
     "schedules",
+    "selection",
     "sites",
 ]
