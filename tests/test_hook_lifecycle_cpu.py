@@ -47,7 +47,9 @@ class _TwoBlockAdapter(ArchitectureAdapter):
         del model, site
         return 2
 
-    def resolve(self, model: _TwoBlockModel, site: Site) -> ResolvedSite:
+    def resolve(self, model: nn.Module, site: Site) -> ResolvedSite:
+        if not isinstance(model, _TwoBlockModel):
+            raise TypeError("_TwoBlockAdapter requires a _TwoBlockModel")
         modules = {
             "first": (model.first, "first"),
             "second": (model.second, "second"),

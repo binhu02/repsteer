@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 import torch
@@ -39,7 +39,7 @@ def _context(
     ],
 )
 def test_text_span_offsets_honor_first_last_and_all(
-    occurrence: str, expected: list[list[bool]]
+    occurrence: Literal["first", "last", "all"], expected: list[list[bool]]
 ):
     context = _context(
         1,
