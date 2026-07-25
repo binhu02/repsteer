@@ -27,14 +27,13 @@ def _window_permutation(
         raise PositionResolutionError(
             "Qwen2.5-VL vision window size must resolve to a positive value"
         )
-    values: list[int] = []
-    for window_row in range(0, output_height, window_size):
-        for window_col in range(0, output_width, window_size):
-            for row in range(window_row, min(window_row + window_size, output_height)):
-                for col in range(
-                    window_col, min(window_col + window_size, output_width)
-                ):
-                    values.append(row * output_width + col)
+    values = [
+        row * output_width + col
+        for window_row in range(0, output_height, window_size)
+        for window_col in range(0, output_width, window_size)
+        for row in range(window_row, min(window_row + window_size, output_height))
+        for col in range(window_col, min(window_col + window_size, output_width))
+    ]
     return torch.tensor(values, dtype=torch.long)
 
 

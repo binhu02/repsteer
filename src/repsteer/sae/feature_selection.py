@@ -147,7 +147,7 @@ def supervised_feature_scores(
         variance = (centered.square() * weights[:, None]).sum(dim=0) / weights.sum()
         return difference / variance.sqrt().clamp_min(eps)
     raise ValueError(
-        "scoring must be 'mean_difference' or " "'standardized_mean_difference'"
+        "scoring must be 'mean_difference' or 'standardized_mean_difference'"
     )
 
 
@@ -187,7 +187,7 @@ def _rank(
     if not bool(torch.isfinite(values).all()):
         raise ValueError("feature scores must be finite")
     ranked = sorted(
-        zip(feature_ids, (float(item) for item in values)),
+        zip(feature_ids, (float(item) for item in values), strict=False),
         key=lambda item: (
             -(abs(item[1]) if absolute else item[1]),
             item[0],
@@ -341,7 +341,7 @@ def _causal_effect(value: Any) -> float:
                 "causal evaluator mappings need 'effect' or "
                 "'intervention' and 'baseline'"
             )
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+    elif isinstance(value, Sequence) and not isinstance(value, str | bytes):
         if len(value) != 2:
             raise ValueError(
                 "causal evaluator sequences must be (intervention, baseline)"

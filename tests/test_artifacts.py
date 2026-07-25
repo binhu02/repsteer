@@ -264,9 +264,9 @@ def test_text_tokenizer_chat_template_participates_in_exact_compatibility():
 
     source = _Target()
     source.tokenizer = Tokenizer("<chat-v1>")
-    template_hash = str(stable_fingerprint(source.tokenizer.chat_template)).removeprefix(
-        "sha256:"
-    )
+    template_hash = str(
+        stable_fingerprint(source.tokenizer.chat_template)
+    ).removeprefix("sha256:")
     artifact = _artifact().with_metadata(
         _artifact().metadata.with_updates(
             tokenizer={"chat_template_sha256": template_hash}

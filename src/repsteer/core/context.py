@@ -99,19 +99,24 @@ class StepContext:
         if activation is not None:
             if activation.ndim < 2:
                 raise PositionResolutionError(
-                    "Position selectors require an activation with at least 2 dimensions"
+                    "Position selectors require an activation with at least "
+                    "2 dimensions"
                 )
             inferred = int(activation.shape[-2])
+        if (
+            self.sequence_length is not None
+            and inferred is not None
+            and inferred != self.sequence_length
+            and self.phase != "decode"
+        ):
+            # During cached decoding the context may describe the full sequence
+            # while the current activation contains only its suffix.  That is a
+            # valid and common state, so only reject it outside decode.
+            raise PositionResolutionError(
+                "Context sequence_length does not match activation: "
+                f"{self.sequence_length} != {inferred}"
+            )
         if self.sequence_length is not None:
-            if inferred is not None and inferred != self.sequence_length:
-                # During cached decoding the context may describe the full sequence
-                # while the current activation contains only its suffix.  That is a
-                # valid and common state, so only reject it outside decode.
-                if self.phase != "decode":
-                    raise PositionResolutionError(
-                        "Context sequence_length does not match activation: "
-                        f"{self.sequence_length} != {inferred}"
-                    )
             return inferred if inferred is not None else self.sequence_length
         if inferred is not None:
             return inferred
@@ -152,7 +157,8 @@ class StepContext:
             )
         if mask.shape[0] != batch:
             raise PositionResolutionError(
-                f"attention_mask batch {mask.shape[0]} does not match activation batch {batch}"
+                f"attention_mask batch {mask.shape[0]} does not match "
+                f"activation batch {batch}"
             )
         if mask.shape[1] < sequence:
             raise PositionResolutionError(
@@ -174,7 +180,7 @@ class StepContext:
                 return value.device
         return torch.device("cpu")
 
-    def with_updates(self, **changes: Any) -> "StepContext":
+    def with_updates(self, **changes: Any) -> StepContext:
         return replace(self, **changes)
 
 

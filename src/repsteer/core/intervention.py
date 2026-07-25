@@ -56,7 +56,7 @@ class Intervention:
     def applies_in(self, phase: str) -> bool:
         return self.phase == "both" or self.phase == phase
 
-    def with_strength(self, value: Any) -> "Intervention":
+    def with_strength(self, value: Any) -> Intervention:
         from repsteer.schedules import Constant, StrengthSchedule
 
         schedule = (
@@ -67,25 +67,25 @@ class Intervention:
         )
         return replace(self, strength=schedule)
 
-    def with_gate(self, gate: Any) -> "Intervention":
+    def with_gate(self, gate: Any) -> Intervention:
         return replace(self, gate=gate)
 
-    def with_site(self, site: Site | None) -> "Intervention":
+    def with_site(self, site: Site | None) -> Intervention:
         return replace(self, site=site)
 
-    def with_priority(self, priority: int) -> "Intervention":
+    def with_priority(self, priority: int) -> Intervention:
         return replace(self, priority=priority)
 
-    def with_positions(self, positions: Any) -> "Intervention":
+    def with_positions(self, positions: Any) -> Intervention:
         return replace(self, positions=positions)
 
-    def with_operator(self, operator: Any) -> "Intervention":
+    def with_operator(self, operator: Any) -> Intervention:
         return replace(self, operator=operator)
 
-    def with_phase(self, phase: InterventionPhase) -> "Intervention":
+    def with_phase(self, phase: InterventionPhase) -> Intervention:
         return replace(self, phase=phase)
 
-    def with_artifact(self, artifact: Any) -> "Intervention":
+    def with_artifact(self, artifact: Any) -> Intervention:
         return replace(self, artifact=artifact)
 
     def to_dict(self) -> dict[str, Any]:
@@ -162,12 +162,10 @@ class SteeringPlan:
     def for_phase(self, phase: str) -> tuple[Intervention, ...]:
         return tuple(item for item in self.ordered() if item.applies_in(phase))
 
-    def with_intervention(self, intervention: Intervention) -> "SteeringPlan":
+    def with_intervention(self, intervention: Intervention) -> SteeringPlan:
         return SteeringPlan((*self.interventions, intervention))
 
-    def with_interventions(
-        self, interventions: Iterable[Intervention]
-    ) -> "SteeringPlan":
+    def with_interventions(self, interventions: Iterable[Intervention]) -> SteeringPlan:
         return SteeringPlan((*self.interventions, *tuple(interventions)))
 
     def to_dict(self) -> dict[str, Any]:

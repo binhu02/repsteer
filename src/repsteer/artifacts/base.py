@@ -24,7 +24,7 @@ def _freeze(value: Any) -> Any:
         return MappingProxyType(
             {str(key): _freeze(item) for key, item in value.items()}
         )
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return tuple(_freeze(item) for item in value)
     if isinstance(value, set):
         return frozenset(_freeze(item) for item in value)
@@ -91,7 +91,7 @@ class ArtifactMetadata:
             }
         )
 
-    def with_updates(self, **changes: Any) -> "ArtifactMetadata":
+    def with_updates(self, **changes: Any) -> ArtifactMetadata:
         return replace(self, **changes)
 
     def to_dict(self) -> dict[str, Any]:
@@ -155,7 +155,7 @@ class ArtifactMetadata:
         )
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "ArtifactMetadata":
+    def from_dict(cls, value: Mapping[str, Any]) -> ArtifactMetadata:
         model = value.get("model")
         if isinstance(model, Mapping):
             model_id = model.get("id", "")
@@ -171,7 +171,9 @@ class ArtifactMetadata:
         site = (
             Site.from_dict(site_value)
             if isinstance(site_value, Mapping)
-            else site_value if isinstance(site_value, Site) else None
+            else site_value
+            if isinstance(site_value, Site)
+            else None
         )
         return cls(
             schema_version=str(value.get("schema_version", "1.0")),
@@ -305,8 +307,7 @@ def _metadata_for_tensor(
 ) -> ArtifactMetadata:
     if metadata.artifact_type and metadata.artifact_type != artifact_type:
         raise ValueError(
-            f"{artifact_type} artifact received metadata for "
-            f"{metadata.artifact_type!r}"
+            f"{artifact_type} artifact received metadata for {metadata.artifact_type!r}"
         )
     if metadata.hidden_size not in (0, hidden_size):
         raise ValueError(
@@ -373,12 +374,12 @@ class DirectionArtifact(SteeringArtifact):
     def tensors(self) -> Mapping[str, Tensor]:
         return MappingProxyType({"direction": self.direction})
 
-    def normalized(self, eps: float = 1e-12) -> "DirectionArtifact":
+    def normalized(self, eps: float = 1e-12) -> DirectionArtifact:
         norm = self.direction.norm().clamp_min(eps)
         metadata = self.metadata.with_updates(normalization="l2")
         return DirectionArtifact(metadata, self.direction / norm)
 
-    def with_metadata(self, metadata: ArtifactMetadata) -> "DirectionArtifact":
+    def with_metadata(self, metadata: ArtifactMetadata) -> DirectionArtifact:
         return DirectionArtifact(metadata, self.direction)
 
 
@@ -436,7 +437,7 @@ class SubspaceArtifact(SteeringArtifact):
             values["explained_variance"] = self.explained_variance
         return MappingProxyType(values)
 
-    def with_metadata(self, metadata: ArtifactMetadata) -> "SubspaceArtifact":
+    def with_metadata(self, metadata: ArtifactMetadata) -> SubspaceArtifact:
         return SubspaceArtifact(
             metadata, self.basis, self.mean, self.explained_variance
         )
@@ -496,7 +497,7 @@ class ProbeArtifact(SteeringArtifact):
         logits = self.logits(activation)
         return logits.sigmoid() if self.weight.ndim == 1 else logits.softmax(dim=-1)
 
-    def with_metadata(self, metadata: ArtifactMetadata) -> "ProbeArtifact":
+    def with_metadata(self, metadata: ArtifactMetadata) -> ProbeArtifact:
         return ProbeArtifact(metadata, self.weight, self.bias)
 
 
@@ -571,7 +572,7 @@ class SAEFeatureArtifact(SteeringArtifact):
         metadata = self.metadata.with_updates(artifact_type="direction")
         return DirectionArtifact(metadata, self.decoder_direction)
 
-    def with_metadata(self, metadata: ArtifactMetadata) -> "SAEFeatureArtifact":
+    def with_metadata(self, metadata: ArtifactMetadata) -> SAEFeatureArtifact:
         return SAEFeatureArtifact(
             metadata,
             self.feature_id,

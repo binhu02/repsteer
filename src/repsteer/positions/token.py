@@ -109,7 +109,8 @@ class TokenIndices(PositionSelector):
                 invalid.append(index)
         if invalid and self.strict:
             raise PositionResolutionError(
-                f"Token indices {invalid} are out of range for current length {sequence}"
+                f"Token indices {invalid} are out of range for current "
+                f"length {sequence}"
             )
         if normalized:
             mask[:, torch.as_tensor(normalized, device=mask.device)] = True

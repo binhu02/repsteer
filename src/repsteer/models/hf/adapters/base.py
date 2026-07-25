@@ -31,7 +31,7 @@ class TensorAccessor(Protocol):
 
 def _child(container: Any, key: int | str) -> Any:
     if isinstance(key, int):
-        if not isinstance(container, (tuple, list)):
+        if not isinstance(container, tuple | list):
             raise _site_error(
                 f"tensor path expected tuple/list before index {key}, got "
                 f"{type(container).__name__}"
@@ -174,7 +174,7 @@ class RootOrFirstTensorAccessor:
     def _path(self, container: Any) -> tuple[int | str, ...]:
         if isinstance(container, Tensor):
             return self.extra_path
-        if isinstance(container, (tuple, list)) and container:
+        if isinstance(container, tuple | list) and container:
             if not isinstance(container[0], Tensor) and not self.extra_path:
                 raise _site_error(
                     f"adapter expected tensor at tuple/list item 0, got "
@@ -262,7 +262,7 @@ def _cache_has_content(cache: Any) -> bool:
             return int(get_seq_length()) > 0
         except (TypeError, ValueError, RuntimeError):
             return True
-    if isinstance(cache, Sequence) and not isinstance(cache, (str, bytes)):
+    if isinstance(cache, Sequence) and not isinstance(cache, str | bytes):
         if len(cache) == 0:
             return False
         first = cache[0]
@@ -308,7 +308,7 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
                     value = getattr(value, part)
             except AttributeError:
                 continue
-            if isinstance(value, (nn.ModuleList, list, tuple)):
+            if isinstance(value, nn.ModuleList | list | tuple):
                 return value, display
         raise _site_error(
             f"{self.architecture_name} adapter could not find decoder layers at "
@@ -390,7 +390,8 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
             module = getattr(layer, "post_attention_layernorm", None)
             if not isinstance(module, nn.Module):
                 raise _site_error(
-                    f"decoder layer {layer_index} has no post_attention_layernorm module"
+                    f"decoder layer {layer_index} has no "
+                    "post_attention_layernorm module"
                 )
             path, kind = f"{prefix}.post_attention_layernorm", "forward_pre"
             accessor = PathTensorAccessor(explicit_path or (0,))

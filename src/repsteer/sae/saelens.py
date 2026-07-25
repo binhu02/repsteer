@@ -72,7 +72,7 @@ def _site_from_hook_name(value: Any) -> Site | None:
 def _unwrap_tensor(value: Any, *, operation: str) -> Tensor:
     if isinstance(value, Tensor):
         return value
-    if isinstance(value, (tuple, list)) and value and isinstance(value[0], Tensor):
+    if isinstance(value, tuple | list) and value and isinstance(value[0], Tensor):
         return value[0]
     for name in ("sae_acts", "feature_acts", "hidden_acts", "reconstruction"):
         tensor = getattr(value, name, None)
@@ -148,8 +148,7 @@ class SAELensAdapter:
         encoded = _unwrap_tensor(self.sae.encode(x), operation="encode")
         if encoded.shape[:-1] != x.shape[:-1] or encoded.shape[-1] != self.num_features:
             raise ValueError(
-                "SAELens encode returned an incompatible shape: "
-                f"{tuple(encoded.shape)}"
+                f"SAELens encode returned an incompatible shape: {tuple(encoded.shape)}"
             )
         return encoded
 
@@ -161,8 +160,7 @@ class SAELensAdapter:
         decoded = _unwrap_tensor(self.sae.decode(z), operation="decode")
         if decoded.shape[:-1] != z.shape[:-1] or decoded.shape[-1] != self.input_dim:
             raise ValueError(
-                "SAELens decode returned an incompatible shape: "
-                f"{tuple(decoded.shape)}"
+                f"SAELens decode returned an incompatible shape: {tuple(decoded.shape)}"
             )
         return decoded
 
@@ -199,13 +197,12 @@ class SAELensAdapter:
         device: str | torch.device | None = None,
         site: Site | None = None,
         **kwargs: Any,
-    ) -> "SAELensAdapter":
+    ) -> SAELensAdapter:
         try:
             from sae_lens import SAE  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - optional dependency guard
             raise MissingOptionalDependencyError(
-                "SAELens support requires the 'sae-lens' package; "
-                "install repsteer[sae]"
+                "SAELens support requires the 'sae-lens' package; install repsteer[sae]"
             ) from exc
         load_kwargs = dict(kwargs)
         if device is not None:
@@ -217,7 +214,7 @@ class SAELensAdapter:
         )
         # SAELens releases have returned either SAE or
         # (SAE, config_dict, sparsity) across supported versions.
-        sae = loaded[0] if isinstance(loaded, (tuple, list)) else loaded
+        sae = loaded[0] if isinstance(loaded, tuple | list) else loaded
         return cls(sae=sae, release=release, sae_id=sae_id, site=site)
 
 

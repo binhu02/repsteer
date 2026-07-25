@@ -32,7 +32,7 @@ class Constant(StrengthSchedule):
     def is_always_zero(self) -> bool:
         return self.alpha == 0.0
 
-    def with_alpha(self, alpha: float) -> "Constant":
+    def with_alpha(self, alpha: float) -> Constant:
         return replace(self, alpha=alpha)
 
     def to_dict(self) -> dict[str, Any]:

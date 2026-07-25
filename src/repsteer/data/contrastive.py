@@ -117,7 +117,8 @@ class ContrastivePairs:
             else:
                 if weights is not None:
                     raise ValueError(
-                        "shared weights are ambiguous for unpaired groups; use side weights"
+                        "shared weights are ambiguous for unpaired groups; "
+                        "use side weights"
                     )
                 pos_weights = _weights(
                     positive_weights, len(positives), "positive_weights"
@@ -169,7 +170,7 @@ class ContrastivePairs:
         *,
         paired: bool | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "ContrastivePairs":
+    ) -> ContrastivePairs:
         return cls(records, paired=paired, metadata=metadata)
 
     @classmethod
@@ -180,7 +181,7 @@ class ContrastivePairs:
         *,
         weights: Sequence[float] | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "ContrastivePairs":
+    ) -> ContrastivePairs:
         return cls(
             positives=positives,
             negatives=negatives,
@@ -198,7 +199,7 @@ class ContrastivePairs:
         positive_weights: Sequence[float] | None = None,
         negative_weights: Sequence[float] | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "ContrastivePairs":
+    ) -> ContrastivePairs:
         return cls(
             positives=positives,
             negatives=negatives,
@@ -317,7 +318,7 @@ def _weights(
 def _looks_like_chat(value: Any) -> bool:
     return (
         isinstance(value, Sequence)
-        and not isinstance(value, (str, bytes, bytearray))
+        and not isinstance(value, str | bytes | bytearray)
         and all(
             isinstance(message, Mapping) and "role" in message and "content" in message
             for message in value

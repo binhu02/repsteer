@@ -53,7 +53,7 @@ class NormRelative(StrengthSchedule):
     def is_always_zero(self) -> bool:
         return self.ratio == 0.0
 
-    def with_ratio(self, ratio: float) -> "NormRelative":
+    def with_ratio(self, ratio: float) -> NormRelative:
         return replace(self, ratio=ratio)
 
     def to_dict(self) -> dict[str, Any]:

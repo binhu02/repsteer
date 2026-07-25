@@ -22,7 +22,7 @@ class CompatibilityLevel(str, Enum):
     INCOMPATIBLE = "incompatible"
 
     @classmethod
-    def parse(cls, value: "CompatibilityLevel | str") -> "CompatibilityLevel":
+    def parse(cls, value: CompatibilityLevel | str) -> CompatibilityLevel:
         if isinstance(value, cls):
             return value
         aliases = {
@@ -129,7 +129,7 @@ def _target_attributes(target: Any) -> tuple[str, str | None, str | None, int | 
         architectures = _get(config, "architectures")
         architecture = architecture or (
             architectures[0]
-            if isinstance(architectures, (list, tuple)) and architectures
+            if isinstance(architectures, list | tuple) and architectures
             else None
         )
         architecture = architecture or _get(config, "model_type")

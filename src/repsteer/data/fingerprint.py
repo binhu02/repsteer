@@ -36,7 +36,7 @@ def canonicalize(value: Any) -> Any:
     classes do not accidentally share cache entries.
     """
 
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, str | bool | int):
         return value
     if isinstance(value, float):
         if math.isnan(value):
@@ -80,11 +80,11 @@ def canonicalize(value: Any) -> Any:
         items = [(canonicalize(key), canonicalize(item)) for key, item in value.items()]
         items.sort(key=lambda pair: _json_dumps(pair[0]))
         return {"__mapping__": [[key, item] for key, item in items]}
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         items = [canonicalize(item) for item in value]
         items.sort(key=_json_dumps)
         return {"__set__": items}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [canonicalize(item) for item in value]
 
     # Functions need their implementation and bound values in the fingerprint.
@@ -103,11 +103,13 @@ def canonicalize(value: Any) -> Any:
             if captured is value:
                 closure.append({"__self_reference__": True})
             elif callable(captured):
+                reference = getattr(
+                    captured, "__qualname__", type(captured).__qualname__
+                )
                 closure.append(
                     {
                         "__callable_reference__": (
-                            f"{getattr(captured, '__module__', '')}."
-                            f"{getattr(captured, '__qualname__', type(captured).__qualname__)}"
+                            f"{getattr(captured, '__module__', '')}.{reference}"
                         )
                     }
                 )
@@ -131,7 +133,7 @@ def canonicalize(value: Any) -> Any:
             "args": canonicalize(value.args),
             "keywords": canonicalize(value.keywords),
         }
-    if isinstance(value, (types.BuiltinFunctionType, types.BuiltinMethodType)):
+    if isinstance(value, types.BuiltinFunctionType | types.BuiltinMethodType):
         return {
             "__builtin_callable__": (
                 f"{getattr(value, '__module__', '')}."

@@ -98,7 +98,8 @@ def _fit_logistic_probe(
 
     converged = False
     iterations = 0
-    for iterations in range(1, max_iter + 1):
+    for _iterations in range(1, max_iter + 1):
+        iterations = _iterations
         logits = design @ beta
         probability = torch.sigmoid(logits)
         gradient = design.T @ (weights * (probability - y)) / total_weight

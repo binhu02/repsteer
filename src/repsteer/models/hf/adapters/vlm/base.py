@@ -67,7 +67,7 @@ class VisionLanguageAdapter(DecoderOnlyAdapter):
             self.language_layer_paths,
             description=f"{self.architecture_name} language layers",
         )
-        if not isinstance(layers, (nn.ModuleList, list, tuple)):
+        if not isinstance(layers, nn.ModuleList | list | tuple):
             raise _site_error(
                 f"{self.architecture_name} language layers at {path} are "
                 f"{type(layers).__name__}, not a module sequence"
@@ -80,7 +80,7 @@ class VisionLanguageAdapter(DecoderOnlyAdapter):
             self.vision_layer_paths,
             description=f"{self.architecture_name} vision layers",
         )
-        if not isinstance(layers, (nn.ModuleList, list, tuple)):
+        if not isinstance(layers, nn.ModuleList | list | tuple):
             raise _site_error(
                 f"{self.architecture_name} vision layers at {path} are "
                 f"{type(layers).__name__}, not a module sequence"

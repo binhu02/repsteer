@@ -1,6 +1,7 @@
 # repsteer
 
 [![PyPI](https://img.shields.io/pypi/v/repsteer.svg)](https://pypi.org/project/repsteer/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/github/license/binhu02/repsteer.svg)](LICENSE)
 
 > **Documentation in progress:** The Markdown documentation and full docs site are currently under development. The Markdown available here is an LLM-generated draft and may contain inaccuracies or incomplete information.
@@ -20,11 +21,8 @@ prompt -> Model + Intervention -> steer() -> generated result
 Python 3.10+ is required. Install a PyTorch build appropriate to your CPU/CUDA environment first, then choose the extras you need:
 
 ```bash
-# Core tensor and artifact APIs only
+# Core APIs and Hugging Face text models
 python -m pip install repsteer
-
-# Hugging Face text models
-python -m pip install "repsteer[hf]"
 
 # SAELens SAE support
 python -m pip install "repsteer[sae]"

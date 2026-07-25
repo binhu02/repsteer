@@ -177,7 +177,7 @@ def _satisfies(
     for name, expression in constraints.items():
         if name not in metrics:
             return False
-        if isinstance(expression, (int, float)):
+        if isinstance(expression, int | float):
             if not math.isclose(metrics[name], float(expression)):
                 return False
             continue
@@ -220,6 +220,6 @@ def _finite_json(value: Any) -> Any:
         return None
     if isinstance(value, dict):
         return {key: _finite_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_finite_json(item) for item in value]
     return value

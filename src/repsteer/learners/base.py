@@ -152,7 +152,8 @@ def activation_matrix(batch: ActivationBatch, *, name: str = "activations") -> T
         matrix = matrix[:, 0]
     if matrix.ndim != 2:
         raise ValueError(
-            f"{name} must be [samples, hidden] after pooling; got {tuple(matrix.shape)}. "
+            f"{name} must be [samples, hidden] after pooling; "
+            f"got {tuple(matrix.shape)}. "
             "Choose mean/last/max pooling when capturing multiple positions."
         )
     if matrix.shape[0] == 0 or matrix.shape[1] == 0:
@@ -354,7 +355,7 @@ def _dependency_versions() -> dict[str, str]:
 
 
 def _description(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, torch.dtype):
         return str(value).removeprefix("torch.")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from torch import nn
 
 from .base import DecoderOnlyAdapter, PathTensorAccessor, ResolvedSite, _site_error
@@ -10,7 +12,7 @@ class GemmaAdapter(DecoderOnlyAdapter):
     model_types = frozenset({"gemma", "gemma2"})
     class_prefixes = ("GemmaFor", "GemmaModel", "Gemma2")
 
-    def resolve(self, model: nn.Module, site: object) -> ResolvedSite:
+    def resolve(self, model: nn.Module, site: Any) -> ResolvedSite:
         resolved = super().resolve(model, site)
         model_type = str(getattr(getattr(model, "config", None), "model_type", ""))
         if model_type != "gemma2" or getattr(site, "component", None) != "resid_mid":
@@ -21,7 +23,7 @@ class GemmaAdapter(DecoderOnlyAdapter):
         # attention-residual midpoint is therefore the input to
         # pre_feedforward_layernorm, not post_attention_layernorm (which is the
         # correct midpoint hook for Gemma1/Llama/Mistral/Qwen2).
-        layer_index = int(getattr(site, "layer"))
+        layer_index = int(site.layer)
         layers, layers_path = self._layers(model)
         layer = layers[layer_index]
         module = getattr(layer, "pre_feedforward_layernorm", None)

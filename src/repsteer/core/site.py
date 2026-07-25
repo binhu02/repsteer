@@ -31,9 +31,9 @@ def _unit_from_json(value: Any) -> SiteUnit:
             return slice(value.get("start"), value.get("stop"), value.get("step"))
         if kind == "indices":
             return tuple(int(item) for item in value.get("values", ()))
-    if value is None or isinstance(value, (int, slice)):
+    if value is None or isinstance(value, int | slice):
         return value
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return tuple(int(item) for item in value)
     raise TypeError(f"Unsupported site unit encoding: {value!r}")
 
@@ -59,7 +59,7 @@ class Site:
         if self.io not in ("input", "output"):
             raise ValueError("Site.io must be 'input' or 'output'")
         path = tuple(self.tensor_path)
-        if not all(isinstance(item, (int, str)) for item in path):
+        if not all(isinstance(item, int | str) for item in path):
             raise TypeError("Site.tensor_path entries must be int or str")
         object.__setattr__(self, "tensor_path", path)
         if isinstance(self.unit, list):
@@ -88,7 +88,7 @@ class Site:
         }
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "Site":
+    def from_dict(cls, value: Mapping[str, Any]) -> Site:
         return cls(
             stream=str(value.get("stream", "language")),
             component=str(value["component"]),
@@ -98,19 +98,19 @@ class Site:
             tensor_path=tuple(value.get("tensor_path", ())),
         )
 
-    def with_layer(self, layer: int | None) -> "Site":
+    def with_layer(self, layer: int | None) -> Site:
         return replace(self, layer=layer)
 
-    def with_stream(self, stream: SiteStream | str) -> "Site":
+    def with_stream(self, stream: SiteStream | str) -> Site:
         return replace(self, stream=stream)
 
-    def with_io(self, io: SiteIO) -> "Site":
+    def with_io(self, io: SiteIO) -> Site:
         return replace(self, io=io)
 
-    def with_unit(self, unit: SiteUnit) -> "Site":
+    def with_unit(self, unit: SiteUnit) -> Site:
         return replace(self, unit=unit)
 
-    def with_tensor_path(self, *path: int | str) -> "Site":
+    def with_tensor_path(self, *path: int | str) -> Site:
         return replace(self, tensor_path=tuple(path))
 
 

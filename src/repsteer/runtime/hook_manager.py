@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -393,10 +394,8 @@ class HookManager:
             return handles
         except BaseException:
             for handle in reversed(handles):
-                try:
+                with contextlib.suppress(Exception):
                     handle.remove()
-                except Exception:
-                    pass
             raise
 
     def enter(self, compiled: CompiledPlan) -> None:

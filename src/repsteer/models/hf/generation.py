@@ -232,7 +232,8 @@ class GenerationTracker:
     ) -> StepContext:
         if activation.ndim < 2:
             raise GenerationPhaseError(
-                f"steering activation must have at least 2 dimensions, got {activation.ndim}"
+                "steering activation must have at least 2 dimensions, "
+                f"got {activation.ndim}"
             )
         batch = int(activation.shape[0]) if activation.ndim >= 3 else 1
         sequence = int(activation.shape[-2])

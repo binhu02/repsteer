@@ -186,18 +186,20 @@ def test_first_decode_of_new_generation_cannot_reuse_previous_gate_cache():
             use_cache=True,
         )
         assert len(gate.calls) == 1
-        with pytest.raises(GenerationPhaseError, match="no cached prefill value"):
-            with wrapper.generation_tracker.generation(
+        with (
+            pytest.raises(GenerationPhaseError, match="no cached prefill value"),
+            wrapper.generation_tracker.generation(
                 input_ids=decode_ids,
                 inputs_embeds=None,
                 attention_mask=decode_mask,
-            ):
-                wrapper.model(
-                    input_ids=decode_ids,
-                    attention_mask=decode_mask,
-                    past_key_values=primed.past_key_values,
-                    use_cache=True,
-                )
+            ),
+        ):
+            wrapper.model(
+                input_ids=decode_ids,
+                attention_mask=decode_mask,
+                past_key_values=primed.past_key_values,
+                use_cache=True,
+            )
 
     assert len(gate.calls) == 1
 

@@ -15,11 +15,11 @@ import torch
 def json_safe(value: Any) -> Any:
     """Convert configuration data to JSON primitives without executing code."""
 
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, enum.Enum):
         return json_safe(value.value)
-    if isinstance(value, (torch.dtype, torch.device, Path)):
+    if isinstance(value, torch.dtype | torch.device | Path):
         return str(value)
     if isinstance(value, slice):
         return {
@@ -38,7 +38,7 @@ def json_safe(value: Any) -> Any:
         return json_safe(dataclasses.asdict(cast(Any, value)))
     if isinstance(value, Mapping):
         return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         items = [json_safe(item) for item in value]
         return sorted(
             items,
@@ -46,7 +46,7 @@ def json_safe(value: Any) -> Any:
                 item, sort_keys=True, separators=(",", ":"), ensure_ascii=False
             ),
         )
-    if isinstance(value, (tuple, list)):
+    if isinstance(value, tuple | list):
         return [json_safe(item) for item in value]
     raise TypeError(
         f"Value of type {type(value).__name__} is not safely JSON serializable"

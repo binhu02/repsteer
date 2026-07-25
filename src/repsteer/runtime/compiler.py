@@ -25,7 +25,7 @@ def _activation_gate_sites(gate: Any) -> tuple[Any, ...]:
     if evaluate_at is not None:
         sites.append(evaluate_at)
     nested = getattr(gate, "gates", ())
-    if isinstance(nested, (tuple, list)):
+    if isinstance(nested, tuple | list):
         for value in nested:
             sites.extend(_activation_gate_sites(value))
     single = getattr(gate, "gate", None)
@@ -55,7 +55,7 @@ def _gate_artifacts(gate: Any) -> tuple[Any, ...]:
         if getattr(artifact, "metadata", None) is not None:
             values.append(artifact)
     nested = getattr(gate, "gates", ())
-    if isinstance(nested, (tuple, list)):
+    if isinstance(nested, tuple | list):
         for value in nested:
             values.extend(_gate_artifacts(value))
     single = getattr(gate, "gate", None)
@@ -72,7 +72,7 @@ def _gate_reductions(gate: Any) -> tuple[Any, ...]:
     if reduction is not None:
         values.append(reduction)
     nested = getattr(gate, "gates", ())
-    if isinstance(nested, (tuple, list)):
+    if isinstance(nested, tuple | list):
         for value in nested:
             values.extend(_gate_reductions(value))
     single = getattr(gate, "gate", None)
@@ -113,7 +113,7 @@ def _assert_compatibility(
             raise PlanCompilationError(
                 f"artifact hidden size {artifact_hidden} does not match resolved "
                 f"site hidden size {hidden_size}"
-            )
+            ) from None
         if compatibility == "exact":
             artifact_id = getattr(metadata, "model_id", None)
             artifact_revision = getattr(metadata, "model_revision", None)
@@ -122,7 +122,7 @@ def _assert_compatibility(
                     "exact artifact identity mismatch: "
                     f"{artifact_id}@{artifact_revision} != "
                     f"{model.model_id}@{model.revision}"
-                )
+                ) from None
         return compatibility
 
 
@@ -211,7 +211,8 @@ def compile_plan(
         item_warnings: list[str] = []
         if explicit_cross_site:
             item_warnings.append(
-                f"explicit cross-site application: learned at {source_site}, applied at {site}"
+                "explicit cross-site application: "
+                f"learned at {source_site}, applied at {site}"
             )
         artifact_dtype = getattr(metadata, "dtype", None)
         model_dtype = getattr(model, "dtype", None)
@@ -221,7 +222,8 @@ def compile_plan(
             and str(model_dtype).removeprefix("torch.") != artifact_dtype
         ):
             item_warnings.append(
-                f"artifact dtype {artifact_dtype} will be converted at runtime to {model_dtype}"
+                f"artifact dtype {artifact_dtype} will be converted at "
+                f"runtime to {model_dtype}"
             )
 
         gate_sites = _activation_gate_sites(intervention.gate)

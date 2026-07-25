@@ -155,14 +155,13 @@ def _indices_to_mask(value: Any, mask: Tensor) -> bool:
     if tensor.ndim == 0:
         tensor = tensor.reshape(1)
     if tensor.ndim == 1:
-        if mask.shape[0] != 1:
-            # A 1-D vector with one value per batch is interpreted as one index
-            # for each row; otherwise it is a shared index list.
-            if tensor.numel() == mask.shape[0]:
-                for row, index in enumerate(tensor.tolist()):
-                    if 0 <= int(index) < mask.shape[1]:
-                        mask[row, int(index)] = True
-                return True
+        # A 1-D vector with one value per batch is interpreted as one index
+        # for each row; otherwise it is a shared index list.
+        if mask.shape[0] != 1 and tensor.numel() == mask.shape[0]:
+            for row, index in enumerate(tensor.tolist()):
+                if 0 <= int(index) < mask.shape[1]:
+                    mask[row, int(index)] = True
+            return True
         for index in tensor.tolist():
             if 0 <= int(index) < mask.shape[1]:
                 mask[:, int(index)] = True

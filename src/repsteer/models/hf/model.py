@@ -56,8 +56,8 @@ def _transformers() -> Any:
         return transformers
     except ImportError as exc:
         raise MissingOptionalDependencyError(
-            "Hugging Face model loading requires the optional 'transformers' "
-            "dependency; install repsteer[hf]"
+            "Hugging Face model loading requires the 'transformers' dependency; "
+            "reinstall repsteer with its dependencies"
         ) from exc
 
 
@@ -102,17 +102,13 @@ def _batch_size_from_text(value: Any) -> int:
 def _is_text_batch(value: Any) -> bool:
     return (
         isinstance(value, Sequence)
-        and not isinstance(value, (Tensor, bytes, bytearray, Mapping, str))
+        and not isinstance(value, Tensor | bytes | bytearray | Mapping | str)
         and all(isinstance(item, str) for item in value)
     )
 
 
 def _is_chat_message(value: Any) -> bool:
-    return (
-        isinstance(value, Mapping)
-        and "role" in value
-        and "content" in value
-    )
+    return isinstance(value, Mapping) and "role" in value and "content" in value
 
 
 def _is_chat_conversation(value: Any) -> bool:
@@ -122,7 +118,7 @@ def _is_chat_conversation(value: Any) -> bool:
         return True
     return (
         isinstance(value, Sequence)
-        and not isinstance(value, (str, bytes, bytearray, Mapping))
+        and not isinstance(value, str | bytes | bytearray | Mapping)
         and bool(value)
         and all(_is_chat_message(message) for message in value)
     )
@@ -133,7 +129,7 @@ def _is_chat_batch(value: Any) -> bool:
 
     return (
         isinstance(value, Sequence)
-        and not isinstance(value, (str, bytes, bytearray, Mapping))
+        and not isinstance(value, str | bytes | bytearray | Mapping)
         and bool(value)
         and not _is_chat_conversation(value)
         and all(_is_chat_conversation(conversation) for conversation in value)
@@ -233,10 +229,10 @@ def _image_cardinality(
         raise PositionResolutionError(
             "static image input must be one image or a rank-4 image batch"
         )
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         if not value:
             return 0, None
-        if all(isinstance(item, (list, tuple)) for item in value):
+        if all(isinstance(item, list | tuple) for item in value):
             per_prompt = tuple(len(item) for item in value)
             return sum(per_prompt), per_prompt
         return len(value), None
@@ -294,9 +290,12 @@ def _seeded(seed: int | None, model: nn.Module) -> Iterator[None]:
         return
     cuda_devices: list[int] = []
     for parameter in model.parameters():
-        if parameter.device.type == "cuda" and parameter.device.index is not None:
-            if parameter.device.index not in cuda_devices:
-                cuda_devices.append(parameter.device.index)
+        if (
+            parameter.device.type == "cuda"
+            and parameter.device.index is not None
+            and parameter.device.index not in cuda_devices
+        ):
+            cuda_devices.append(parameter.device.index)
     with torch.random.fork_rng(devices=cuda_devices):
         torch.manual_seed(int(seed))
         yield
@@ -374,7 +373,7 @@ class HFSteerableModel:
         architectures = getattr(config, "architectures", None)
         self.architecture = (
             str(architectures[0])
-            if isinstance(architectures, (tuple, list)) and architectures
+            if isinstance(architectures, tuple | list) and architectures
             else type(model).__qualname__
         )
         self.generation_tracker = GenerationTracker()
@@ -386,7 +385,7 @@ class HFSteerableModel:
         model: nn.Module,
         tokenizer: Any | None = None,
         **kwargs: Any,
-    ) -> "HFSteerableModel":
+    ) -> HFSteerableModel:
         return cls(model, tokenizer, **kwargs)
 
     @classmethod
@@ -394,7 +393,7 @@ class HFSteerableModel:
         cls,
         model_name_or_path: str,
         **kwargs: Any,
-    ) -> "HFSteerableModel":
+    ) -> HFSteerableModel:
         return from_pretrained(model_name_or_path, **kwargs)
 
     @property
@@ -460,8 +459,7 @@ class HFSteerableModel:
             if callable(getattr(candidate, "apply_chat_template", None)):
                 return candidate
         raise MissingOptionalDependencyError(
-            "chat inputs require a tokenizer or processor with "
-            "apply_chat_template"
+            "chat inputs require a tokenizer or processor with apply_chat_template"
         )
 
     def _render_chat_samples(
@@ -503,8 +501,7 @@ class HFSteerableModel:
         if apply_chat_template is False:
             if any(structured):
                 raise TypeError(
-                    "structured chat messages require apply_chat_template=True "
-                    "or None"
+                    "structured chat messages require apply_chat_template=True or None"
                 )
             if configured:
                 raise TypeError(
@@ -758,15 +755,12 @@ class HFSteerableModel:
             apply_chat_template, bool
         ):
             raise TypeError("apply_chat_template must be True, False, or None")
-        if supplied_generation_prompt is not _MISSING and not isinstance(
-            supplied_generation_prompt, bool
-        ):
+        if supplied_generation_prompt is _MISSING:
+            add_generation_prompt = True
+        elif isinstance(supplied_generation_prompt, bool):
+            add_generation_prompt = supplied_generation_prompt
+        else:
             raise TypeError("add_generation_prompt must be a bool")
-        add_generation_prompt = (
-            True
-            if supplied_generation_prompt is _MISSING
-            else supplied_generation_prompt
-        )
         singular_image = kwargs.pop("image", None)
         plural_images = kwargs.pop("images", None)
         if singular_image is not None and plural_images is not None:
@@ -832,8 +826,7 @@ class HFSteerableModel:
 
         if images is not None:
             if not values or not (
-                isinstance(values[0], str)
-                or _is_text_batch(values[0])
+                isinstance(values[0], str) or _is_text_batch(values[0])
             ):
                 raise TypeError(
                     "multimodal generation requires a string prompt, prompt batch, "
@@ -857,10 +850,7 @@ class HFSteerableModel:
                 )
             kwargs = {**encoded, **kwargs}
             values = ()
-        elif values and (
-            isinstance(values[0], str)
-            or _is_text_batch(values[0])
-        ):
+        elif values and (isinstance(values[0], str) or _is_text_batch(values[0])):
             if len(values) != 1:
                 raise TypeError(
                     "text generation accepts one prompt or prompt batch argument"
@@ -873,7 +863,8 @@ class HFSteerableModel:
             duplicates = set(encoded) & set(kwargs)
             if duplicates:
                 raise TypeError(
-                    f"encoded inputs conflict with generation kwargs: {sorted(duplicates)}"
+                    "encoded inputs conflict with generation kwargs: "
+                    f"{sorted(duplicates)}"
                 )
             kwargs = {**encoded, **kwargs}
             values = ()
@@ -886,7 +877,8 @@ class HFSteerableModel:
             duplicates = set(encoded) & set(kwargs)
             if duplicates:
                 raise TypeError(
-                    f"encoded inputs conflict with generation kwargs: {sorted(duplicates)}"
+                    "encoded inputs conflict with generation kwargs: "
+                    f"{sorted(duplicates)}"
                 )
             kwargs = {**encoded, **kwargs}
             values = ()
@@ -941,17 +933,17 @@ class HFSteerableModel:
         was_training = self.model.training
         self.model.eval()
         try:
-            with self.generation_tracker.generation(
-                input_ids=input_ids,
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                modality_map=modality_map,
+            with (
+                self.generation_tracker.generation(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    modality_map=modality_map,
+                ),
+                _seeded(None if seed is None else int(seed), self.model),
+                torch.inference_mode(),
             ):
-                with (
-                    _seeded(None if seed is None else int(seed), self.model),
-                    torch.inference_mode(),
-                ):
-                    raw = self.model.generate(*values, **generation_kwargs)
+                raw = self.model.generate(*values, **generation_kwargs)  # type: ignore[operator]
         finally:
             self.model.train(was_training)
         sequences = _extract_sequences(raw)
@@ -1152,7 +1144,8 @@ def _select_capture(
     working = activation.unsqueeze(0) if unbatched else activation
     if working.ndim < 3:
         raise PositionResolutionError(
-            f"captured activation must be [B,S,H] or [S,H], got {tuple(activation.shape)}"
+            "captured activation must be [B,S,H] or [S,H], "
+            f"got {tuple(activation.shape)}"
         )
     counts = mask.sum(dim=-1)
     equal_counts = counts.numel() <= 1 or bool(torch.all(counts == counts[0]).item())

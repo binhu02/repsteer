@@ -35,7 +35,7 @@ class SAEActivationGate(Gate):
     absolute: bool = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.feature, (SAEFeatureArtifact, int)) or isinstance(
+        if not isinstance(self.feature, SAEFeatureArtifact | int) or isinstance(
             self.feature, bool
         ):
             raise TypeError(

@@ -109,7 +109,7 @@ class CaptureRequest:
         inputs: Sequence[Any],
         *,
         sample_weights: Sequence[float] | Tensor | None = None,
-    ) -> "CaptureRequest":
+    ) -> CaptureRequest:
         return replace(self, inputs=inputs, sample_weights=sample_weights)
 
 
@@ -142,7 +142,8 @@ class ActivationBatch:
             ).flatten()
             if weights.numel() != batch_size:
                 raise ValueError(
-                    f"sample_weights has length {weights.numel()}, expected {batch_size}"
+                    f"sample_weights has length {weights.numel()}, "
+                    f"expected {batch_size}"
                 )
             if bool((weights < 0).any()):
                 raise ValueError("sample_weights must be non-negative")
@@ -191,7 +192,7 @@ class ActivationBatch:
     def __len__(self) -> int:
         return int(self.activations.shape[0])
 
-    def pool(self, pooling: Any | None = None) -> "ActivationBatch":
+    def pool(self, pooling: Any | None = None) -> ActivationBatch:
         from .pooling import pool_activations
 
         pooling = self.request.pooling if pooling is None and self.request else pooling
@@ -218,7 +219,7 @@ class ActivationBatch:
         self,
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
-    ) -> "ActivationBatch":
+    ) -> ActivationBatch:
         activations = self.activations.to(device=device, dtype=dtype)
         mask = (
             self.attention_mask.to(device=device)
@@ -244,15 +245,15 @@ class ActivationBatch:
             pooled=self.pooled,
         )
 
-    def detach(self) -> "ActivationBatch":
+    def detach(self) -> ActivationBatch:
         result = self.to()
         result.activations = result.activations.detach()
         return result
 
-    def cpu(self) -> "ActivationBatch":
+    def cpu(self) -> ActivationBatch:
         return self.to(device="cpu")
 
-    def clone(self) -> "ActivationBatch":
+    def clone(self) -> ActivationBatch:
         result = self.to()
         result.activations = result.activations.clone()
         if result.attention_mask is not None:

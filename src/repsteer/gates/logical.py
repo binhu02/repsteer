@@ -40,7 +40,7 @@ class AndGate(Gate):
     gates: tuple[Gate, ...]
 
     def __init__(self, *gates: Gate) -> None:
-        if len(gates) == 1 and isinstance(gates[0], (tuple, list)):
+        if len(gates) == 1 and isinstance(gates[0], tuple | list):
             gates = tuple(gates[0])
         if len(gates) < 2 or not all(isinstance(gate, Gate) for gate in gates):
             raise TypeError("AndGate requires at least two Gate objects")
@@ -67,7 +67,7 @@ class OrGate(Gate):
     gates: tuple[Gate, ...]
 
     def __init__(self, *gates: Gate) -> None:
-        if len(gates) == 1 and isinstance(gates[0], (tuple, list)):
+        if len(gates) == 1 and isinstance(gates[0], tuple | list):
             gates = tuple(gates[0])
         if len(gates) < 2 or not all(isinstance(gate, Gate) for gate in gates):
             raise TypeError("OrGate requires at least two Gate objects")

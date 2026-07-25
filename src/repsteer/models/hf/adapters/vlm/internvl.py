@@ -19,7 +19,7 @@ from .modality_map import (
 
 
 def _pair(value: Any, *, name: str) -> tuple[int, int]:
-    if isinstance(value, (tuple, list)):
+    if isinstance(value, tuple | list):
         if len(value) != 2:
             raise PositionResolutionError(f"{name} must contain two dimensions")
         return int(value[0]), int(value[1])

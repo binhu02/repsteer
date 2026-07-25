@@ -29,8 +29,7 @@ def _resolve_feature_id(
         )
     if feature_id < 0 or feature_id >= activation.shape[-1]:
         raise IndexError(
-            f"feature_id {feature_id} is outside latent width "
-            f"{activation.shape[-1]}"
+            f"feature_id {feature_id} is outside latent width {activation.shape[-1]}"
         )
     metadata = getattr(artifact, "metadata", None)
     config = getattr(metadata, "config", {})

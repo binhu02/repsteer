@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 import torch
 import transformers
@@ -9,7 +11,7 @@ from repsteer.models.hf.adapters import PathTensorAccessor, get_adapter
 
 
 def _tiny_model(family: str):
-    common = dict(
+    common: dict[str, Any] = dict(
         vocab_size=32,
         hidden_size=16,
         intermediate_size=32,

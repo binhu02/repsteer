@@ -524,8 +524,7 @@ def test_capture_templates_single_and_batched_chat_inputs():
         ({"role": "user", "content": "cruel words"},),
     ]
     assert all(
-        call["add_generation_prompt"] is False
-        for call in tokenizer.template_calls
+        call["add_generation_prompt"] is False for call in tokenizer.template_calls
     )
 
 
@@ -534,12 +533,8 @@ def test_chat_learner_forwards_rendering_configuration_and_template_metadata():
     data = ContrastivePairs.from_records(
         [
             {
-                "positive_messages": [
-                    {"role": "user", "content": "kind words"}
-                ],
-                "negative_messages": [
-                    {"role": "user", "content": "cruel words"}
-                ],
+                "positive_messages": [{"role": "user", "content": "kind words"}],
+                "negative_messages": [{"role": "user", "content": "cruel words"}],
             }
         ]
     )
@@ -620,9 +615,7 @@ def test_chat_template_kwargs_reach_renderer_and_are_recorded_in_provenance():
         [
             {
                 "positive_messages": messages,
-                "negative_messages": [
-                    {"role": "user", "content": "cruel words"}
-                ],
+                "negative_messages": [{"role": "user", "content": "cruel words"}],
             }
         ]
     )
