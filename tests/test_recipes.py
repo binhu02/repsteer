@@ -294,7 +294,7 @@ class _PerSampleSequenceGate:
     def __init__(self, values: list[bool]) -> None:
         self.evaluate_at = resid_post(0)
         self.values = values
-        self.calls = []
+        self.calls: list[tuple[str, tuple[int, ...]]] = []
 
     def evaluate(self, context):
         activation = context.metadata["activation"]
