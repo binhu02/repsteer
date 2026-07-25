@@ -934,6 +934,7 @@ class HFSteerableModel:
         self.model.eval()
         try:
             with (
+                self.hook_manager.generation_scope(),
                 self.generation_tracker.generation(
                     input_ids=input_ids,
                     inputs_embeds=inputs_embeds,

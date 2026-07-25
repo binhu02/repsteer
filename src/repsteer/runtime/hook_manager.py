@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,7 +40,13 @@ def _as_tensor(
     )
 
 
-def _gate_weights(gate: Any, mask: Tensor, activation: Tensor) -> tuple[Tensor, bool]:
+def _gate_weights(
+    gate: Any,
+    mask: Tensor,
+    activation: Tensor,
+    *,
+    cached_sequence_gate: bool = False,
+) -> tuple[Tensor, bool]:
     """Return [B,S] gate weights and whether they are strictly boolean."""
 
     # Preserve boolean gates so selected/unselected merging uses torch.where
@@ -48,10 +54,21 @@ def _gate_weights(gate: Any, mask: Tensor, activation: Tensor) -> tuple[Tensor, 
     value = torch.as_tensor(gate, device=activation.device)
     batch, sequence = mask.shape
     if value.ndim == 0:
+        if cached_sequence_gate and batch != 1:
+            raise PositionResolutionError(
+                "cached sequence gate has one decision for a target batch of "
+                f"{batch}; cached decisions must remain one per original sample"
+            )
         value = value.expand(batch, sequence)
     elif value.ndim == 1:
         if value.numel() == batch:
             value = value[:, None].expand(batch, sequence)
+        elif cached_sequence_gate:
+            raise PositionResolutionError(
+                "cached sequence gate has "
+                f"{value.numel()} decisions for a target batch of {batch}; cached "
+                "decisions must remain one per original sample"
+            )
         elif value.numel() > 0 and batch % value.numel() == 0:
             value = value.repeat_interleave(batch // value.numel())
             value = value[:, None].expand(batch, sequence)
@@ -89,7 +106,13 @@ def _cacheable_sequence_gate(value: Any, activation: Tensor, context: Any) -> Te
     while tensor.ndim > 1 and tensor.shape[-1] == 1:
         tensor = tensor.squeeze(-1)
     batch = context.resolved_batch_size()
-    if tensor.ndim > 1 or (tensor.ndim == 1 and tensor.numel() not in (1, batch)):
+    if batch > 1 and (tensor.ndim != 1 or tensor.numel() != batch):
+        raise GenerationPhaseError(
+            "a cached sequence gate must return exactly one value per batch item; "
+            f"got shape {tuple(tensor.shape)} for batch {batch}. Scalar or "
+            "single-decision broadcasting is not supported"
+        )
+    if batch == 1 and (tensor.ndim > 1 or (tensor.ndim == 1 and tensor.numel() != 1)):
         raise GenerationPhaseError(
             "a cached sequence gate must return a scalar or one value per "
             f"batch item; got shape {tuple(tensor.shape)} for batch {batch}"
@@ -151,6 +174,7 @@ def apply_compiled_intervention(
     # Non-zero controls invoke every remaining protocol component.  Position
     # selection and gate blending stay runtime-owned, so operators cannot write
     # outside the selected token mask.
+    cached_sequence_gate = gate_value is not _MISSING and item.gate_site is not None
     raw_mask = intervention.positions.select(activation, context)
     mask = validate_mask(torch.as_tensor(raw_mask), activation, context)
     if gate_value is _MISSING:
@@ -169,7 +193,12 @@ def apply_compiled_intervention(
         )
         gate_context = context.with_updates(metadata=metadata)
         gate_value = intervention.gate.evaluate(gate_context)
-    weights, boolean_gate = _gate_weights(gate_value, mask, activation)
+    weights, boolean_gate = _gate_weights(
+        gate_value,
+        mask,
+        activation,
+        cached_sequence_gate=cached_sequence_gate,
+    )
 
     # Pass a clone so a third-party in-place operator cannot alter positions
     # outside the runtime-owned mask before the merge.
@@ -273,8 +302,29 @@ class HookManager:
         if context.phase == "decode" and not first_tracked_forward:
             return
         with self._lock:
-            for frame in self._frames:
-                frame.gate_values.clear()
+            self._clear_gate_values_locked()
+
+    def _clear_gate_values_locked(self) -> None:
+        for frame in self._frames:
+            frame.gate_values.clear()
+
+    @contextlib.contextmanager
+    def generation_scope(self) -> Iterator[None]:
+        """Isolate cached sequence-gate decisions to one wrapper generation.
+
+        The tracker owns phase information; this manager owns hook-local state.
+        Clearing at both boundaries makes a failed generation indistinguishable
+        from a completed one to a reusable steering session.
+        """
+
+        self.assert_owner()
+        with self._lock:
+            self._clear_gate_values_locked()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._clear_gate_values_locked()
 
     def _install_tracking_hook(self) -> Any:
         try:
@@ -484,6 +534,7 @@ class HookManager:
                     "steering sessions must exit in last-in, first-out order"
                 )
             self._frames.pop()
+            frame.gate_values.clear()
             failures: list[str] = []
             for handle in reversed(frame.handles):
                 try:
@@ -530,6 +581,7 @@ class HookManager:
                         handle.remove()
                     except Exception as exc:
                         failures.append(str(exc))
+                frame.gate_values.clear()
             self._frames.clear()
             if self._tracking_handle is not None:
                 try:

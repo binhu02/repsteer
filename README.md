@@ -116,7 +116,10 @@ control = rs.Intervention(
 )
 
 with model.steer(control):
-    result = model.generate("A customer says: I have waited two weeks and I am furious. Reply briefly:", max_new_tokens=64)
+    result = model.generate(
+        "A customer says: I have waited two weeks and I am furious. Reply briefly:",
+        max_new_tokens=64,
+    )
 ```
 
 The default compatibility level, `"exact"`, checks model ID, an explicit revision, site, and hidden size. VLM artifacts also check processor/preprocessing information. Use `compatibility="architecture"` or `"dimension"` only for explicit research-reuse cases where weaker checking is intended.
@@ -140,7 +143,10 @@ print(compiled.explain())
 print(compiled.diagnostics().effective_rank)
 
 with model.steer(compiled):
-    result = model.generate("A customer says: I have waited two weeks and I am furious. Reply briefly:", max_new_tokens=48)
+    result = model.generate(
+        "A customer says: I have waited two weeks and I am furious. Reply briefly:",
+        max_new_tokens=48,
+    )
 ```
 
 Interventions run first by ascending `priority`, then by declaration order. Hooks exist only inside `with model.steer(...):` and are cleaned up even when generation raises an exception.
@@ -163,6 +169,48 @@ print(batch.shape)  # [samples, hidden_size]
 ```
 
 Pass `store=rs.capture.MemoryStore()` to cache results by capture request. Capture is rejected during an active steering session or `generate()` call so that intervened activations are not accidentally reused.
+
+## Recipes: common intervention plans
+
+`rs.recipes` contains small, artifact-first builders for common behaviors. Each
+recipe returns an ordinary `SteeringPlan`; it does not compile a model, install
+hooks, or start generation. The resulting plan remains inspectable and
+composable with other interventions.
+
+Remove the component of an activation in a learned direction or subspace:
+
+```python
+plan = rs.recipes.directional_ablation(
+    artifact=direction_or_subspace,
+    positions=rs.positions.AllTokens(),
+    phase="both",
+)
+
+with model.steer(plan):
+    result = model.generate("Write one sentence.", max_new_tokens=32, do_sample=False)
+```
+
+Apply a direction only when an existing gate enables it:
+
+```python
+gate = rs.gates.ProbeGate(
+    probe_artifact,
+    threshold=0.5,
+    evaluate_at=rs.sites.resid_post(16),
+)
+plan = rs.recipes.gated_direction(
+    steering_artifact=direction_artifact,
+    gate=gate,
+    positions=rs.positions.GeneratedTokens(),
+    strength=0.4,
+    phase="decode",
+)
+```
+
+`gated_direction()` is a general conditional direction-addition API, not a
+complete CAST implementation. It accepts artifacts rather than bare tensors;
+the normal compiler still performs model, revision, site, and hidden-dimension
+compatibility checks.
 
 ## Core API
 
@@ -225,12 +273,14 @@ Activation capture and contrastive learners use the same rendering rules. Their
 learning from complete chat examples:
 
 ```python
-chat_data = rs.data.ContrastivePairs.from_records([
-    {
-        "positive_messages": [{"role": "user", "content": "Be helpful."}],
-        "negative_messages": [{"role": "user", "content": "Be cruel."}],
-    },
-])
+chat_data = rs.data.ContrastivePairs.from_records(
+    [
+        {
+            "positive_messages": [{"role": "user", "content": "Be helpful."}],
+            "negative_messages": [{"role": "user", "content": "Be cruel."}],
+        },
+    ]
+)
 artifact = rs.learners.DiffMean(
     site=rs.sites.resid_post(20),
     positions=rs.positions.LastNonPaddingToken(),
@@ -303,13 +353,13 @@ artifact = rs.learners.DiffMean(
 
 ```python
 rs.Intervention(
-    artifact=artifact,                       # Required
-    operator=rs.operators.Add(),             # Required
+    artifact=artifact,  # Required
+    operator=rs.operators.Add(),  # Required
     positions=rs.positions.GeneratedTokens(),  # Required
-    strength=rs.schedules.Constant(1),       # Required
-    site=None,                               # Defaults to artifact metadata's site
+    strength=rs.schedules.Constant(1),  # Required
+    site=None,  # Defaults to artifact metadata's site
     gate=rs.gates.Always(),
-    phase="both",                           # "prefill" | "decode" | "both"
+    phase="both",  # "prefill" | "decode" | "both"
     priority=0,
 )
 ```
@@ -352,7 +402,18 @@ Important: in ordinary cached generation, a decode intervention using `Generated
 | `rs.gates.CosineGate(...)`, `CallableGate(...)` | Custom cosine- or Python-callable-based conditions. |
 | `rs.gates.AndGate(...)`, `OrGate(...)`, `NotGate(...)` | Compose gates logically. |
 
-When an activation gate has `evaluate_at=site`, it reads a language-stream activation once in prefill and caches one decision per sample for decode. Such sequence gates cannot start from a pre-populated KV cache and cannot use a vision/projector site as `evaluate_at`.
+When an activation gate has `evaluate_at=site`, it reads a language-stream
+activation once in prefill and caches exactly one decision per original batch
+sample for decode. That cache is scoped to one `model.generate()` invocation
+and is cleared on both successful and exceptional exits. A scalar decision is
+rejected for batch sizes greater than one rather than broadcast across samples.
+Such sequence gates cannot start from a pre-populated KV cache, cannot use a
+vision/projector condition site, and currently control language-stream targets
+only; the runtime has no reliable mapping from language samples to arbitrary
+vision/projector rows. A different language condition site is supported when
+it executes no later than the steering site during prefill; use `phase="decode"`
+for the stable staged form. Gates without `evaluate_at` remain dynamic gates of
+the controlled activation.
 
 ### Artifacts and safe I/O
 
@@ -489,9 +550,25 @@ report.to_json("reports/sweep.json")
 
 Related APIs include `rs.evaluation.CallableMetric`, `ContainsText`, `MeanOutputLength`, and `SweepReport`. VLM experiments can use `EvaluationMetricGroups`, `MultimodalEvaluationRecord`, and `MultimodalEvaluationReport` to record representation, causal-behavior, and capability/quality measurements separately.
 
+## Compatibility evidence
+
+Adapter resolution and a successful public-checkpoint run are different claims.
+The table lists only local evidence in this repository; none of these rows
+claims a public checkpoint, CUDA, or multi-GPU validation.
+
+| Model family | Adapter capability | Checkpoint/revision | Validation level | Notes |
+| --- | --- | --- | --- | --- |
+| Gemma2, Llama, Mistral, Qwen2 | Language residual/attention/MLP semantic sites | Local tiny Transformers configs | adapter contract tested | CPU unit contracts validate site read/rebuild behavior. |
+| Qwen2.5-VL, InternVL | Language, vision-residual, projector input/output sites | Local fake structural contracts | adapter contract tested | Static-image mapping contracts only; no public VLM checkpoint smoke test. |
+
 ## Runtime boundaries
 
-- Only eager Hugging Face runtime is supported; arbitrary custom generation loops, end-to-end beam search, and assisted/speculative decoding are not guaranteed.
+- Local tests cover normal forwards with dynamic gates plus greedy and sampled
+  batch generation with language sequence gates. Beam search, beam reordering,
+  `num_return_sequences`, assisted generation, speculative decoding, custom
+  generation loops, and model-parallel generation are not validated or
+  supported by a state-remapping contract.
+- Only eager Hugging Face runtime is supported.
 - Quantized/offloaded target modules, model-parallel steering, video/audio, unlisted VLM architectures, and the VLM fusion stream are unsupported.
 - Current built-in adapters do not support `head_out`, `logits`, or unit/head-level interventions.
 - Dynamic recomputation of sequence gates during decode and re-entrant/checkpointed activation capture are unsupported.
@@ -504,6 +581,7 @@ python -m pip install -e ".[dev]"
 pytest
 mypy src/repsteer
 ruff check .
+ruff format --check .
 ```
 
 The test suite uses local tiny-model configurations; CUDA tests are skipped when CUDA is unavailable.

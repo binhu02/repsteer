@@ -244,6 +244,13 @@ def compile_plan(
                     "on the language stream because vision/projector batches do not "
                     "map one-to-one to language batch items"
                 )
+            if getattr(site, "stream", None) != "language":
+                raise PlanCompilationError(
+                    f"intervention {declaration_index} applies a cached sequence "
+                    f"gate to {site}; cached language decisions currently support "
+                    "only language-stream targets because no target-row to sample "
+                    "mapping contract is available"
+                )
             try:
                 gate_site = model.resolve_site(gate_semantic_site)
             except Exception as exc:

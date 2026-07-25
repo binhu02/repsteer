@@ -64,6 +64,31 @@ class _CountingSequenceGate:
         }
 
 
+class _ScalarSequenceGate(_CountingSequenceGate):
+    def evaluate(self, context):
+        activation = context.metadata["activation"]
+        self.calls.append((context.phase, tuple(activation.shape)))
+        return torch.tensor(True, device=activation.device)
+
+
+class _MixedSequenceGate(_CountingSequenceGate):
+    def evaluate(self, context):
+        activation = context.metadata["activation"]
+        self.calls.append((context.phase, tuple(activation.shape)))
+        return torch.tensor([True, False], device=activation.device)
+
+
+class _RaisingDecodeAdd:
+    def apply(self, activation, artifact, strength, context):
+        if context.phase == "decode":
+            raise RuntimeError("decode failure")
+        return Add().apply(activation, artifact, strength, context)
+
+
+def _gate_values_are_empty(wrapper):
+    return all(not frame.gate_values for frame in wrapper.hook_manager._frames)
+
+
 def test_sequence_gate_evaluates_once_in_prefill_and_reuses_for_decode():
     wrapper = _wrapper()
     gate = _CountingSequenceGate()
@@ -121,6 +146,123 @@ def test_sequence_gate_cache_is_reset_for_each_generation():
             )
 
     assert [phase for phase, _ in gate.calls] == ["prefill", "prefill"]
+
+
+def test_batched_sequence_gate_requires_one_decision_per_sample():
+    wrapper = _wrapper()
+    gate = _MixedSequenceGate()
+    control = Intervention(
+        artifact=_artifact(wrapper),
+        operator=Add(),
+        positions=GeneratedTokens(),
+        strength=Constant(0.1),
+        gate=gate,
+        phase="decode",
+    )
+    inputs = torch.tensor([[1, 4, 5], [1, 6, 7]])
+
+    with wrapper.steer(control):
+        result = wrapper.generate(
+            inputs,
+            attention_mask=torch.ones_like(inputs),
+            min_new_tokens=3,
+            max_new_tokens=3,
+            do_sample=False,
+            use_cache=True,
+        )
+        assert _gate_values_are_empty(wrapper)
+
+    assert result.token_ids.shape[0] == 2
+    assert gate.calls == [("prefill", (2, 3, wrapper.hidden_size))]
+
+
+def test_batched_sequence_gate_rejects_scalar_decision_without_broadcasting():
+    wrapper = _wrapper()
+    gate = _ScalarSequenceGate()
+    control = Intervention(
+        artifact=_artifact(wrapper),
+        operator=Add(),
+        positions=GeneratedTokens(),
+        strength=Constant(0.1),
+        gate=gate,
+        phase="decode",
+    )
+    inputs = torch.tensor([[1, 4, 5], [1, 6, 7]])
+
+    with wrapper.steer(control):
+        with pytest.raises(
+            GenerationPhaseError,
+            match="exactly one value per batch item",
+        ):
+            wrapper.generate(
+                inputs,
+                attention_mask=torch.ones_like(inputs),
+                min_new_tokens=3,
+                max_new_tokens=3,
+                do_sample=False,
+                use_cache=True,
+            )
+        assert _gate_values_are_empty(wrapper)
+        assert not wrapper.generation_tracker.generation_active
+        assert wrapper.generation_tracker.current is None
+
+    assert wrapper.hook_manager.hook_count == 0
+
+
+def test_sequence_gate_state_and_hooks_clear_after_normal_and_failed_generation():
+    normal_wrapper = _wrapper()
+    normal_gate = _CountingSequenceGate()
+    normal_control = Intervention(
+        artifact=_artifact(normal_wrapper),
+        operator=Add(),
+        positions=GeneratedTokens(),
+        strength=Constant(0.1),
+        gate=normal_gate,
+        phase="decode",
+    )
+    inputs = torch.tensor([[1, 4, 5]])
+
+    with normal_wrapper.steer(normal_control):
+        normal_wrapper.generate(
+            inputs,
+            attention_mask=torch.ones_like(inputs),
+            min_new_tokens=3,
+            max_new_tokens=3,
+            do_sample=False,
+            use_cache=True,
+        )
+        assert _gate_values_are_empty(normal_wrapper)
+        assert not normal_wrapper.generation_tracker.generation_active
+        assert normal_wrapper.generation_tracker.current is None
+
+    assert normal_wrapper.hook_manager.hook_count == 0
+
+    failing_wrapper = _wrapper()
+    failing_gate = _CountingSequenceGate()
+    failing_control = Intervention(
+        artifact=_artifact(failing_wrapper),
+        operator=_RaisingDecodeAdd(),
+        positions=GeneratedTokens(),
+        strength=Constant(0.1),
+        gate=failing_gate,
+        phase="decode",
+    )
+    with failing_wrapper.steer(failing_control):
+        with pytest.raises(RuntimeError, match="decode failure"):
+            failing_wrapper.generate(
+                inputs,
+                attention_mask=torch.ones_like(inputs),
+                min_new_tokens=3,
+                max_new_tokens=3,
+                do_sample=False,
+                use_cache=True,
+            )
+        assert failing_gate.calls == [("prefill", (1, 3, failing_wrapper.hidden_size))]
+        assert _gate_values_are_empty(failing_wrapper)
+        assert not failing_wrapper.generation_tracker.generation_active
+        assert failing_wrapper.generation_tracker.current is None
+
+    assert failing_wrapper.hook_manager.hook_count == 0
 
 
 def test_static_zero_strength_removes_target_and_gate_hooks_without_rng_effect():

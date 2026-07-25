@@ -231,6 +231,9 @@ def check_compatibility(
         and target_architecture
         and metadata.architecture == target_architecture
     )
+    architecture_exact_or_unknown = (
+        not (metadata.architecture and target_architecture) or architecture_match
+    )
     if metadata.architecture and target_architecture and not architecture_match:
         reasons.append(
             "architecture differs "
@@ -289,6 +292,7 @@ def check_compatibility(
         and sites_match
         and exact_id
         and exact_revision
+        and architecture_exact_or_unknown
         and processor_match
         and tokenizer_template_match
     ):
