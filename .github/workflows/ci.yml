@@ -20,4 +20,9 @@ jobs:
       - run: pre-commit run --all-files
         env:
           SKIP: pytest
-      - run: pytest
+      - run: pytest -m "not gpu" --cov=repsteer --cov-branch --cov-report=term-missing
+      - name: Enforce core-module coverage floors
+        run: |
+          coverage report --include='src/repsteer/runtime/*' --fail-under=75
+          coverage report --include='src/repsteer/capture/*' --fail-under=75
+          coverage report --include='src/repsteer/positions/*' --fail-under=80

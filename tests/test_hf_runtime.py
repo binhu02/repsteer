@@ -149,7 +149,7 @@ def _chat_wrapper():
     )
 
 
-def test_public_dtype_uses_the_transformers_4x_loading_keyword():
+def test_public_dtype_uses_the_transformers_5_loading_keyword():
     config = transformers.LlamaConfig(
         vocab_size=32,
         hidden_size=16,
@@ -178,8 +178,8 @@ def test_public_dtype_uses_the_transformers_4x_loading_keyword():
     )
 
     assert wrapped.raw_model is raw
-    assert Loader.seen["torch_dtype"] is torch.float32
-    assert "dtype" not in Loader.seen
+    assert Loader.seen["dtype"] is torch.float32
+    assert "torch_dtype" not in Loader.seen
 
 
 def _artifact(wrapper, *, revision="rev-1"):

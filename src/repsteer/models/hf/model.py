@@ -1230,17 +1230,16 @@ def from_pretrained(
 
     transformers = _transformers()
     resolved_dtype = _torch_dtype(dtype)
-    # repsteer exposes the forward-compatible public spelling ``dtype`` while
-    # supporting Transformers 4.49 through 4.x.  The older loading keyword is
-    # accepted throughout that declared range; early 4.x releases would pass
-    # an unknown ``dtype`` through to the model constructor instead.
+    # repsteer requires Transformers >=5, where ``dtype`` is the public loading
+    # keyword.  Accept ``torch_dtype`` as a legacy caller alias, but normalize
+    # it before passing options to Transformers.
     legacy_dtype = model_kwargs.pop("torch_dtype", None)
     if legacy_dtype is not None:
         if dtype is not None:
             raise TypeError("pass either dtype=... or torch_dtype=..., not both")
         resolved_dtype = _torch_dtype(legacy_dtype)
     if resolved_dtype is not None:
-        model_kwargs.setdefault("torch_dtype", resolved_dtype)
+        model_kwargs.setdefault("dtype", resolved_dtype)
     if revision is not None:
         model_kwargs.setdefault("revision", revision)
 

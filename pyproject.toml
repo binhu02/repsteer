@@ -30,6 +30,7 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=3.7",
     "pytest>=7.4",
+    "pytest-cov>=7.0",
     "ruff>=0.5",
 ]
 
@@ -47,6 +48,15 @@ select = [
 ]
 
 [tool.pytest.ini_options]
+addopts = "--strict-markers"
 markers = [
-    "gpu: tests that require an CUDA environment",
+    "gpu: tests that require a CUDA environment",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["repsteer"]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
