@@ -309,7 +309,7 @@ rs.sites.mlp_out(layer)
 rs.sites.resid_post(layer)
 ```
 
-Built-in text adapters support Gemma/Gemma2, Llama, Mistral, and Qwen2. Qwen2.5-VL and InternVL additionally support:
+Built-in text adapters support Gemma/Gemma2, Llama, Mistral, Qwen2, and Qwen3. Qwen2.5-VL and InternVL additionally support:
 
 ```python
 rs.sites.vision_resid(layer)
@@ -644,7 +644,7 @@ claims a public checkpoint, CUDA, or multi-GPU validation.
 
 | Model family | Adapter capability | Checkpoint/revision | Validation level | Notes |
 | --- | --- | --- | --- | --- |
-| Gemma2, Llama, Mistral, Qwen2 | Language residual/attention/MLP semantic sites and residual capability declaration | Local tiny Transformers configs | adapter contract tested | CPU unit contracts validate site read/rebuild behavior. |
+| Gemma2, Llama, Mistral, Qwen2, Qwen3 | Language residual/attention/MLP semantic sites and residual capability declaration | Local tiny Transformers configs | adapter contract tested | CPU unit contracts validate site read/rebuild behavior. |
 | Qwen2.5-VL, InternVL | Language, vision-residual, projector input/output sites and static-image modality-map declaration | Local fake structural contracts | adapter contract tested | Static-image mapping contracts only; no public VLM checkpoint smoke test. |
 
 ## Runtime boundaries

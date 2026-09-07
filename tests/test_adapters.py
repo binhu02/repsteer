@@ -30,6 +30,10 @@ def _tiny_model(family: str):
         )
     if family == "qwen2":
         return transformers.Qwen2ForCausalLM(transformers.Qwen2Config(**common))
+    if family == "qwen3":
+        return transformers.Qwen3ForCausalLM(
+            transformers.Qwen3Config(**common, head_dim=4)
+        )
     if family == "gemma2":
         return transformers.Gemma2ForCausalLM(
             transformers.Gemma2Config(**common, head_dim=4)
@@ -49,7 +53,7 @@ def test_tensor_accessor_rebuilds_tuple_without_losing_auxiliary_values():
     assert torch.equal(source[0], torch.ones_like(source[0]))
 
 
-@pytest.mark.parametrize("family", ["gemma2", "llama", "mistral", "qwen2"])
+@pytest.mark.parametrize("family", ["gemma2", "llama", "mistral", "qwen2", "qwen3"])
 def test_architecture_adapter_contract_for_all_v010_sites(family):
     model = _tiny_model(family).eval()
     adapter = get_adapter(model)

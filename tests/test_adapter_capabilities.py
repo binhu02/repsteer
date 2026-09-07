@@ -13,6 +13,7 @@ from repsteer.models.hf.adapters import (
     ModalityMappingCapability,
     Qwen2_5_VLAdapter,
     Qwen2Adapter,
+    Qwen3Adapter,
     SampleMappingCapability,
     get_adapter,
 )
@@ -75,7 +76,13 @@ def test_vlm_capabilities_keep_language_sample_mapping_separate_from_modality_ma
 
 
 def test_all_builtin_text_adapters_declare_only_the_existing_residual_surface():
-    for adapter in (LlamaAdapter(), MistralAdapter(), Qwen2Adapter(), GemmaAdapter()):
+    for adapter in (
+        LlamaAdapter(),
+        MistralAdapter(),
+        Qwen2Adapter(),
+        Qwen3Adapter(),
+        GemmaAdapter(),
+    ):
         capabilities = adapter.capabilities
 
         assert capabilities.supports_residual_read

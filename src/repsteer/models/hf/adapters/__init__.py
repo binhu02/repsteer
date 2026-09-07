@@ -15,6 +15,7 @@ from .gemma import GemmaAdapter
 from .llama import LlamaAdapter
 from .mistral import MistralAdapter
 from .qwen2 import Qwen2Adapter
+from .qwen3 import Qwen3Adapter
 from .registry import (
     DEFAULT_ADAPTER_REGISTRY,
     AdapterRegistry,
@@ -45,6 +46,7 @@ __all__ = [
     "ModalityMap",
     "PathTensorAccessor",
     "Qwen2Adapter",
+    "Qwen3Adapter",
     "Qwen25VLAdapter",
     "Qwen2VLAdapter",
     "Qwen2_5_VLAdapter",
