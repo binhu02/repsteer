@@ -10,6 +10,7 @@ from .gemma import GemmaAdapter
 from .llama import LlamaAdapter
 from .mistral import MistralAdapter
 from .qwen2 import Qwen2Adapter
+from .qwen3 import Qwen3Adapter
 from .vlm import InternVLAdapter, Qwen2_5_VLAdapter
 
 
@@ -74,6 +75,7 @@ DEFAULT_ADAPTER_REGISTRY = AdapterRegistry(
         Qwen2_5_VLAdapter(),
         InternVLAdapter(),
         Qwen2Adapter(),
+        Qwen3Adapter(),
     )
 )
 
