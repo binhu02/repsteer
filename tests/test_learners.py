@@ -5,7 +5,7 @@ import torch
 from repsteer.artifacts import DirectionArtifact, ProbeArtifact, SubspaceArtifact
 from repsteer.capture import ActivationBatch, MemoryStore
 from repsteer.data import ContrastivePairs
-from repsteer.learners import LAT, PCA, ActAdd, DiffMean, LinearProbe
+from repsteer.learners import LAT, PCA, ActAdd, DiffMean, LinearProbe, lat_components
 from repsteer.positions import LastNonPaddingToken
 from repsteer.sites import resid_post
 
@@ -70,6 +70,65 @@ def test_direction_and_subspace_learners_have_deterministic_math():
     assert torch.dot(diff.direction, torch.tensor([1.0, 0.0, 0.0])) > 0.99
     assert diff.metadata.dataset_fingerprint == data.fingerprint
     assert diff.metadata.method == "diff_mean"
+    assert lat.metadata.config["pair_signing"] == "seeded_pair_shuffle"
+    assert lat.metadata.config["sign_alignment"] == "positive_pairwise_vote"
+
+
+def test_lat_emulates_official_shuffled_pair_order_before_centered_pca():
+    positive = torch.tensor([[10.0, -3.0], [10.0, -1.0], [10.0, 1.0], [10.0, 3.0]])
+    negative = torch.zeros_like(positive)
+
+    shuffled, mean, _ = lat_components(
+        positive,
+        negative,
+        pair_signs=torch.tensor([1.0, -1.0, 1.0, -1.0]),
+    )
+    preserved, _, _ = lat_components(
+        positive,
+        negative,
+        shuffle_pair_order=False,
+    )
+
+    # Randomly swapping members inside official RepE pairs turns the common x
+    # shift into PCA variance.  Keeping the original order instead leaves only
+    # the y variation after PCA centering.
+    assert torch.allclose(shuffled[0], torch.tensor([1.0, 0.0]), atol=1e-6)
+    assert torch.allclose(mean, torch.tensor([10.0, 0.0]), atol=1e-6)
+    assert torch.allclose(preserved[0].abs(), torch.tensor([0.0, 1.0]), atol=1e-6)
+
+
+def test_lat_uses_pairwise_label_votes_to_orient_components():
+    positive = torch.tensor([[-10.0], [-9.0], [-8.0], [100.0]])
+    negative = torch.zeros_like(positive)
+
+    basis, _, _ = lat_components(
+        positive,
+        negative,
+        shuffle_pair_order=False,
+    )
+
+    # Three of four positive activations fall below their paired negative
+    # activation.  Official RepE resolves this PCA sign by pairwise label vote,
+    # rather than by the magnitude-weighted mean difference (which is positive).
+    assert torch.allclose(basis[0], torch.tensor([-1.0]), atol=1e-6)
+
+
+def test_lat_keeps_official_raw_difference_scaling():
+    positive = torch.tensor(
+        [[100.0, 0.0], [-100.0, 0.0], [0.0, 1.0], [0.0, -1.0], [0.0, 1.0], [0.0, -1.0]]
+    )
+    negative = torch.zeros_like(positive)
+
+    basis, _, _ = lat_components(
+        positive,
+        negative,
+        shuffle_pair_order=False,
+    )
+
+    # Upstream PCA consumes raw differences.  Row-wise L2 normalization would
+    # make the repeated y differences dominate, whereas the official estimator
+    # correctly retains the larger x variation.
+    assert torch.allclose(basis[0].abs(), torch.tensor([1.0, 0.0]), atol=1e-6)
 
 
 def test_linear_probe_separates_examples_and_capture_store_is_reused():
