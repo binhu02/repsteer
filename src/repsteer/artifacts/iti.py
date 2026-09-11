@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import Tensor
@@ -164,13 +164,16 @@ class ITIArtifact(SteeringArtifact):
 
     @property
     def layers(self) -> tuple[int, ...]:
-        return tuple(sorted({entry.layer for entry in self.heads}))
+        # __post_init__ always normalizes heads to tuple[ITIHead, ...] via
+        # object.__setattr__, which mypy cannot see through from the
+        # constructor's wider (JSON-friendly) declared field type.
+        heads = cast("tuple[ITIHead, ...]", self.heads)
+        return tuple(sorted({entry.layer for entry in heads}))
 
     def entries_for_layer(self, layer: int) -> tuple[tuple[int, ITIHead], ...]:
+        heads = cast("tuple[ITIHead, ...]", self.heads)
         return tuple(
-            (index, entry)
-            for index, entry in enumerate(self.heads)
-            if entry.layer == layer
+            (index, entry) for index, entry in enumerate(heads) if entry.layer == layer
         )
 
     def bind(self, model: Any, *, compatibility: str = "exact") -> ITIArtifact:

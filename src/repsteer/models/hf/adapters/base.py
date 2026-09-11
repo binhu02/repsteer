@@ -449,8 +449,13 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
                 raise _site_error(
                     f"decoder layer {layer_index} self_attn has no o_proj module"
                 )
+            # nn.Module's own __getattr__ is typed Tensor | Module, not int;
+            # o_proj's concrete type (nn.Linear and friends) isn't statically
+            # known here, so read defensively and let int() reject whatever
+            # comes back instead of trusting an inferred attribute type.
+            raw_in_features = getattr(module, "in_features", None)
             try:
-                input_width = int(module.in_features)
+                input_width = int(cast(Any, raw_in_features))
             except (TypeError, ValueError) as exc:
                 raise _site_error(
                     f"{self.architecture_name} o_proj must expose integer in_features"
