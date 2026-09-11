@@ -177,6 +177,20 @@ def compile_plan(
             raise PlanCompilationError(
                 f"failed to resolve intervention {declaration_index} at {site}: {exc}"
             ) from exc
+        if getattr(site, "component", None) == "head_result":
+            capabilities = getattr(
+                getattr(model, "adapter", None), "capabilities", None
+            )
+            require = getattr(capabilities, "require", None)
+            if not callable(require):
+                raise PlanCompilationError(
+                    "head_result interventions require an adapter with an explicit "
+                    "head-result capability declaration"
+                )
+            try:
+                require("head_result")
+            except (TypeError, ValueError) as exc:
+                raise PlanCompilationError(str(exc)) from exc
 
         _validate_protocol(
             intervention.positions, "select", "positions", declaration_index

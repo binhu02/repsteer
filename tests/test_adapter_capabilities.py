@@ -48,9 +48,9 @@ def test_text_adapter_capabilities_are_stable_and_match_resolved_residual_contra
     assert capabilities.sample_mapping.target_streams == ("language",)
     assert "language.resid_post" in capabilities.residual_sites
     assert adapter.resolve(_tiny_llama(), sites.resid_post(0)).hidden_dim == 16
-    assert capabilities.head_result is None
+    assert capabilities.head_result is not None
     assert capabilities.attention_bias is None
-    assert not capabilities.supports("head_result")
+    assert capabilities.supports("head_result")
     assert not capabilities.supports("attention_bias")
     assert capabilities.explain() == adapter.capabilities.explain()
 
@@ -71,11 +71,11 @@ def test_vlm_capabilities_keep_language_sample_mapping_separate_from_modality_ma
         assert "projector.projector_in" in capabilities.residual_sites
         assert AdapterCapabilities.from_dict(capabilities.to_dict()) == capabilities
         assert capabilities.canonical == adapter.capabilities.canonical
-        assert capabilities.head_result is None
+        assert capabilities.head_result is not None
         assert capabilities.attention_bias is None
 
 
-def test_all_builtin_text_adapters_declare_only_the_existing_residual_surface():
+def test_all_builtin_text_adapters_declare_the_residual_and_head_result_surfaces():
     for adapter in (
         LlamaAdapter(),
         MistralAdapter(),
@@ -89,15 +89,14 @@ def test_all_builtin_text_adapters_declare_only_the_existing_residual_surface():
         assert capabilities.supports_residual_write
         assert capabilities.sample_mapping is not None
         assert capabilities.modality_mapping is None
-        assert capabilities.head_result is None
+        assert capabilities.head_result is not None
         assert capabilities.attention_bias is None
 
 
-def test_capability_requirements_fail_closed_with_deterministic_diagnostics():
+def test_capability_requirements_declare_head_result_and_fail_closed_elsewhere():
     capabilities = LlamaAdapter().capabilities
 
-    with pytest.raises(ValueError, match="representation surface is unsupported"):
-        capabilities.require("head_result")
+    capabilities.require("head_result")
     with pytest.raises(ValueError, match="unknown adapter capability requirement"):
         capabilities.require("not_a_surface")
     assert not capabilities.supports("not_a_surface")

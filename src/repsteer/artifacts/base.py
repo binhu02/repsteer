@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, TypeVar, cast
+from typing import Any, TypeAlias, TypeVar, cast
 
 import torch
 from torch import Tensor
@@ -581,7 +581,9 @@ class SAEFeatureArtifact(SteeringArtifact):
         )
 
 
-Artifact = DirectionArtifact | SubspaceArtifact | ProbeArtifact | SAEFeatureArtifact
+# All concrete public artifacts inherit this base. Keeping the alias broad also
+# lets artifact I/O return newer, independently-defined artifact subclasses.
+Artifact: TypeAlias = SteeringArtifact
 
 
 __all__ = [

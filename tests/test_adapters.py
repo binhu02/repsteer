@@ -66,7 +66,14 @@ def test_architecture_adapter_contract_for_all_v010_sites(family):
     adapter = get_adapter(model)
     if family == "qwen3":
         assert isinstance(adapter, Qwen3Adapter)
-    components = ("resid_pre", "attn_out", "resid_mid", "mlp_out", "resid_post")
+    components = (
+        "resid_pre",
+        "attn_out",
+        "head_result",
+        "resid_mid",
+        "mlp_out",
+        "resid_post",
+    )
     resolved_sites = {
         component: adapter.resolve(model, getattr(sites, component)(0))
         for component in components
@@ -106,6 +113,10 @@ def test_architecture_adapter_contract_for_all_v010_sites(family):
 
     assert result.logits.shape == (1, 3, 32)
     assert seen == {component: (1, 3, 16) for component in components}
+    head = resolved_sites["head_result"]
+    assert head.hidden_dim == 4
+    assert head.hook_kind == "forward_pre"
+    assert head.module_path.endswith("self_attn.o_proj")
     for resolved in resolved_sites.values():
         hooks = (
             resolved.module._forward_pre_hooks

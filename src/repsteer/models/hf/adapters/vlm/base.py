@@ -66,6 +66,7 @@ class VisionLanguageAdapter(DecoderOnlyAdapter):
             supports_residual_read=True,
             supports_residual_write=True,
             sample_mapping=text_capabilities.sample_mapping,
+            head_result=text_capabilities.head_result,
             modality_mapping=ModalityMappingCapability(
                 streams=("vision", "projector", "language"),
                 contract=f"{self.architecture_name}_modality_map_static_images",

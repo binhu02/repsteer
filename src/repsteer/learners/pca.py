@@ -63,8 +63,63 @@ def principal_components(
 compute_pca = principal_components
 
 
+def _orient_by_group_difference(
+    basis: Tensor,
+    positive: Tensor,
+    negative: Tensor,
+    *,
+    positive_weights: Tensor,
+    negative_weights: Tensor,
+) -> Tensor:
+    """Flip each component to align with ``mean(positive) - mean(negative)``.
+
+    ``principal_components()`` only resolves the arbitrary SVD sign
+    deterministically (largest-magnitude coordinate positive), which carries
+    no relation to the positive/negative labels. This reorients each
+    component toward the group that actually carries the "positive" label,
+    so a rank-1 result is safe to hand to an additive steering operator
+    without an external sign check. A near-zero alignment (e.g. the group
+    means coincide) leaves the deterministic magnitude-based sign as-is
+    rather than flipping on noise.
+    """
+
+    result = basis.clone()
+    group_difference = weighted_mean(positive, positive_weights) - weighted_mean(
+        negative, negative_weights
+    )
+    alignment = result @ group_difference.to(dtype=result.dtype)
+    result[alignment < 0] *= -1
+    return result
+
+
 @dataclass
 class PCA(ContrastiveLearner):
+    """Centered PCA/SVD over pooled positive and negative activations.
+
+    This pools ``positive`` and ``negative`` activations into one matrix
+    (``data.paired`` is not required) and centers by their combined mean, so
+    the returned components capture whatever axes carry the most variance in
+    that pooled cloud — not necessarily the positive/negative contrast. Each
+    component's sign is then oriented toward the positive group via
+    :func:`_orient_by_group_difference` (aligned with
+    ``mean(positive) - mean(negative)``), so it is safe to use directly with
+    an additive steering operator.
+
+    This is still **not** RepE's PCA reading vector (Zou et al., 2023): the
+    official implementation always PCAs the *paired difference*
+    ``positive - negative`` (see ``repe/rep_reading_pipeline.py``'s
+    unconditional adjacent-pair differencing before every
+    ``direction_method``, including ``'pca'``), which cancels any variance
+    shared by both groups before extracting components — this class does
+    not, so a component may still track a confound rather than the intended
+    contrast, even though its sign is now well-defined.
+    :class:`~repsteer.learners.LAT` reproduces the official method
+    faithfully, including its pairwise sign vote; prefer
+    ``LAT(n_components=1)`` (which requires ``data.paired``) when you want
+    that stronger guarantee, and reserve ``PCA`` for independent/unpaired
+    groups or exploratory use.
+    """
+
     n_components: int = 1
     center: bool = True
     normalize: str | None = "orthonormal"
@@ -88,19 +143,22 @@ class PCA(ContrastiveLearner):
         positive_batch, negative_batch = self._capture_pair(model, data, store)
         positive = activation_matrix(positive_batch, name="positive activations")
         negative = activation_matrix(negative_batch, name="negative activations")
+        positive_weights = sample_weights(positive_batch, positive)
+        negative_weights = sample_weights(negative_batch, negative)
         activations = torch.cat((positive, negative), dim=0)
-        weights = torch.cat(
-            (
-                sample_weights(positive_batch, positive),
-                sample_weights(negative_batch, negative),
-            ),
-            dim=0,
-        )
+        weights = torch.cat((positive_weights, negative_weights), dim=0)
         basis, mean, explained_variance = principal_components(
             activations,
             n_components=self.n_components,
             weights=weights,
             center=self.center,
+        )
+        basis = _orient_by_group_difference(
+            basis,
+            positive,
+            negative,
+            positive_weights=positive_weights,
+            negative_weights=negative_weights,
         )
         basis = basis.detach().to(device="cpu", dtype=torch.float32)
         mean = mean.detach().to(device="cpu", dtype=torch.float32)
@@ -118,6 +176,7 @@ class PCA(ContrastiveLearner):
                 "center": self.center,
                 "samples": activations.shape[0],
                 "svd": "torch.linalg.svd",
+                "sign_alignment": "positive_negative_mean_difference",
             },
         )
         return SubspaceArtifact(

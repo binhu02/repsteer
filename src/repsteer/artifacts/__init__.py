@@ -24,6 +24,7 @@ from .compatibility import (
     check_compatibility,
 )
 from .io import load_artifact, save_artifact, verify_artifact_checksums
+from .iti import ITIArtifact, ITIHead
 
 __all__ = [
     "Artifact",
@@ -33,6 +34,8 @@ __all__ = [
     "CompatibilityLevel",
     "CompatibilityResult",
     "DirectionArtifact",
+    "ITIArtifact",
+    "ITIHead",
     "BundleCompatibilityResult",
     "ProbeArtifact",
     "SAEFeatureArtifact",

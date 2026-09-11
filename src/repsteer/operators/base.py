@@ -97,6 +97,7 @@ def strength_tensor(value: Any, activation: Tensor) -> Tensor:
 
 def operator_from_dict(value: Mapping[str, Any]) -> Operator:
     from .add import Add, Subtract
+    from .iti import ITIAdd
     from .projection import RemoveProjection
     from .replace import Replace
     from .sae import Ablate, Clamp, SAEAblate, SAEClamp
@@ -106,6 +107,8 @@ def operator_from_dict(value: Mapping[str, Any]) -> Operator:
         return Add()
     if kind == "subtract":
         return Subtract()
+    if kind == "iti_add":
+        return ITIAdd(layer=value["layer"])
     if kind in ("remove_projection", "removeprojection"):
         return RemoveProjection(eps=value.get("eps", 1e-12))
     if kind == "replace":

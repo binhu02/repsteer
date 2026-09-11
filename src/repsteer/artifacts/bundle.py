@@ -46,18 +46,20 @@ from .io import (
     load_artifact,
     save_artifact,
 )
+from .iti import ITIArtifact
 
 _BUNDLE_SCHEMA_VERSION = "1.0"
 _BUNDLE_KIND = "artifact_bundle"
 _COMPONENTS_DIRECTORY = "components"
 _SUPPORTED_COMPONENT_TYPES = frozenset(
-    {"direction", "subspace", "probe", "sae_feature"}
+    {"direction", "subspace", "probe", "sae_feature", "iti"}
 )
 _SUPPORTED_COMPONENT_CLASSES = (
     DirectionArtifact,
     SubspaceArtifact,
     ProbeArtifact,
     SAEFeatureArtifact,
+    ITIArtifact,
 )
 _COMPATIBILITY_RANK = {
     CompatibilityLevel.INCOMPATIBLE: 0,
@@ -207,7 +209,7 @@ class ArtifactBundleComponent:
             raise TypeError(
                 "ArtifactBundle components must be supported repsteer artifacts "
                 "(DirectionArtifact, SubspaceArtifact, ProbeArtifact, or "
-                "SAEFeatureArtifact), got "
+                "SAEFeatureArtifact, or ITIArtifact), got "
                 f"{type(self.artifact).__name__}"
             )
         artifact_type = self.artifact.metadata.artifact_type
@@ -380,6 +382,12 @@ def _check_component_compatibility(
     component: ArtifactBundleComponent, target: Any
 ) -> CompatibilityResult:
     """Run the existing component contract after resolving its semantic site."""
+
+    if isinstance(component.artifact, ITIArtifact):
+        try:
+            return component.artifact.check_compatibility(target)
+        except Exception as exc:
+            return _failed_component_compatibility(component, target, exc)
 
     site: Site | None = None
     hidden_size: int | None = None

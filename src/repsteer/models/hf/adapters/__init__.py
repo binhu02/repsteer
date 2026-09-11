@@ -8,6 +8,7 @@ from .base import (
 )
 from .capabilities import (
     AdapterCapabilities,
+    HeadResultCapability,
     ModalityMappingCapability,
     SampleMappingCapability,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "DEFAULT_ADAPTER_REGISTRY",
     "DecoderOnlyAdapter",
     "GemmaAdapter",
+    "HeadResultCapability",
     "InternVLAdapter",
     "LlamaAdapter",
     "MistralAdapter",

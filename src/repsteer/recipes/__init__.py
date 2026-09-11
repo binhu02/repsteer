@@ -12,14 +12,16 @@ import torch
 
 from repsteer.artifacts import (
     DirectionArtifact,
+    ITIArtifact,
     SAEFeatureArtifact,
     SubspaceArtifact,
 )
 from repsteer.core import Intervention, InterventionPhase, Site, SteeringPlan
 from repsteer.gates import Gate
-from repsteer.operators import Add, RemoveProjection
-from repsteer.positions import PositionSelector
+from repsteer.operators import Add, ITIAdd, RemoveProjection
+from repsteer.positions import GeneratedTokens, PositionSelector
 from repsteer.schedules import Constant, StrengthSchedule
+from repsteer.sites import head_result
 
 DirectionalArtifact: TypeAlias = DirectionArtifact | SubspaceArtifact
 DirectionAddArtifact: TypeAlias = (
@@ -169,4 +171,45 @@ def gated_direction(
     return SteeringPlan((intervention,))
 
 
-__all__ = ["directional_ablation", "gated_direction"]
+def iti(
+    profile: ITIArtifact,
+    *,
+    positions: PositionSelector | None = None,
+    strength: float | StrengthSchedule = 1.0,
+    phase: InterventionPhase = "decode",
+    priority: int = 0,
+) -> SteeringPlan:
+    """Build a faithful pre-``o_proj`` ITI plan from a learned profile.
+
+    ``strength`` is the ITI paper's :math:`\\alpha`; each profile row already
+    contains the calibrated :math:`\\sigma_{l,h}\\theta_{l,h}` term. The default
+    targets generated tokens only, matching the official implementation's
+    decode-only intervention rather than editing the input prompt.
+    """
+
+    if not isinstance(profile, ITIArtifact):
+        raise TypeError("iti() requires an ITIArtifact")
+    if phase not in {"prefill", "decode", "both"}:
+        raise ValueError("iti() phase must be 'prefill', 'decode', or 'both'")
+    selected_positions = GeneratedTokens() if positions is None else positions
+    schedule = (
+        strength
+        if isinstance(strength, StrengthSchedule)
+        or callable(getattr(strength, "value", None))
+        else Constant(strength)
+    )
+    return SteeringPlan(
+        Intervention(
+            artifact=profile,
+            operator=ITIAdd(layer=layer),
+            positions=selected_positions,
+            strength=schedule,
+            site=head_result(layer),
+            phase=phase,
+            priority=priority,
+        )
+        for layer in profile.layers
+    )
+
+
+__all__ = ["directional_ablation", "gated_direction", "iti"]

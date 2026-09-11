@@ -8,7 +8,11 @@ from typing import Any, Literal, Protocol, cast
 
 from torch import Tensor, nn
 
-from .capabilities import AdapterCapabilities, SampleMappingCapability
+from .capabilities import (
+    AdapterCapabilities,
+    HeadResultCapability,
+    SampleMappingCapability,
+)
 
 
 def _site_error(message: str) -> Exception:
@@ -292,11 +296,19 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
     model_types: frozenset[str] = frozenset()
     class_prefixes: tuple[str, ...] = ()
     supported_components = frozenset(
-        {"resid_pre", "attn_out", "resid_mid", "mlp_out", "resid_post"}
+        {
+            "resid_pre",
+            "attn_out",
+            "head_result",
+            "resid_mid",
+            "mlp_out",
+            "resid_post",
+        }
     )
     component_io = {
         "resid_pre": "output",
         "attn_out": "output",
+        "head_result": "input",
         "resid_mid": "output",
         "mlp_out": "output",
         "resid_post": "output",
@@ -327,6 +339,7 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
                 target_streams=("language",),
                 contract="language_batch_rows",
             ),
+            head_result=HeadResultCapability(),
         )
 
     def supports(self, model: nn.Module) -> bool:
@@ -425,6 +438,33 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
                     else RootOrFirstTensorAccessor()
                 ),
             )
+        elif component == "head_result":
+            attention = getattr(layer, "self_attn", None)
+            if not isinstance(attention, nn.Module):
+                raise _site_error(
+                    f"decoder layer {layer_index} has no self_attn module"
+                )
+            module = getattr(attention, "o_proj", None)
+            if not isinstance(module, nn.Module):
+                raise _site_error(
+                    f"decoder layer {layer_index} self_attn has no o_proj module"
+                )
+            try:
+                input_width = int(module.in_features)
+            except (TypeError, ValueError) as exc:
+                raise _site_error(
+                    f"{self.architecture_name} o_proj must expose integer in_features"
+                ) from exc
+            query_heads = _query_head_count(model)
+            if input_width <= 0 or input_width % query_heads:
+                raise _site_error(
+                    "o_proj input width must be divisible by "
+                    "config.num_attention_heads "
+                    f"for head_result; got {input_width} and {query_heads}"
+                )
+            path, kind = f"{prefix}.self_attn.o_proj", "forward_pre"
+            accessor = PathTensorAccessor(explicit_path or (0,))
+            head_dim = input_width // query_heads
         elif component == "resid_mid":
             module = getattr(layer, "post_attention_layernorm", None)
             if not isinstance(module, nn.Module):
@@ -464,6 +504,30 @@ class DecoderOnlyAdapter(ArchitectureAdapter):
             module_path=path,
             hook_kind=kind,  # type: ignore[arg-type]
             tensor_accessor=accessor,
-            hidden_dim=self.hidden_size(model, site),
+            hidden_dim=(
+                head_dim
+                if component == "head_result"
+                else self.hidden_size(model, site)
+            ),
             architecture_name=self.architecture_name,
         )
+
+
+def _query_head_count(model: nn.Module) -> int:
+    config = getattr(model, "config", None)
+    for owner in (
+        config,
+        getattr(config, "text_config", None),
+        getattr(config, "llm_config", None),
+    ):
+        value = getattr(owner, "num_attention_heads", None)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            break
+        count = int(value)
+        if count > 0:
+            return count
+    raise _site_error(
+        "adapter could not determine a positive config.num_attention_heads"
+    )

@@ -34,6 +34,13 @@ def attn_out(layer: int, **kwargs: Any) -> Site:
     return _site("attn_out", layer, **kwargs)
 
 
+def head_result(layer: int, **kwargs: Any) -> Site:
+    """The flattened query-head result immediately before ``self_attn.o_proj``."""
+
+    kwargs.setdefault("io", "input")
+    return _site("head_result", layer, **kwargs)
+
+
 def resid_mid(layer: int, **kwargs: Any) -> Site:
     return _site("resid_mid", layer, **kwargs)
 
@@ -79,6 +86,7 @@ __all__ = [
     "Site",
     "attn_out",
     "fusion_out",
+    "head_result",
     "head_out",
     "logits",
     "mlp_out",

@@ -227,6 +227,15 @@ def _build_artifact(
             tensors["decoder_direction"],
             normalized_score,
         )
+    if artifact_type == "iti":
+        if "directions" not in tensors:
+            raise ArtifactFormatError("ITI artifact has no 'directions' tensor")
+        heads = metadata.config.get("heads")
+        if not isinstance(heads, tuple | list):
+            raise ArtifactFormatError("ITI artifact metadata has no valid 'heads' list")
+        from .iti import ITIArtifact
+
+        return ITIArtifact(metadata, tensors["directions"], tuple(heads))
     raise ArtifactFormatError(f"Unsupported artifact_type {artifact_type!r}")
 
 

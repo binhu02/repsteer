@@ -204,6 +204,69 @@ class ModalityMappingCapability:
 
 
 @dataclass(frozen=True, slots=True)
+class HeadResultCapability:
+    """A tested pre-output-projection query-head representation surface."""
+
+    component: str = "language.head_result"
+    contract: str = "self_attn.o_proj.input_flattened_query_heads"
+    schema_version: int = _CAPABILITY_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _require_schema_version(
+                self.schema_version, name="HeadResultCapability schema"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "component",
+            _require_nonempty_string(
+                self.component, name="HeadResultCapability.component"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "contract",
+            _require_nonempty_string(
+                self.contract, name="HeadResultCapability.contract"
+            ),
+        )
+        if self.component != "language.head_result":
+            raise ValueError(
+                "HeadResultCapability.component must be 'language.head_result'"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "component": self.component,
+            "contract": self.contract,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> HeadResultCapability:
+        if not isinstance(value, dict):
+            raise TypeError("HeadResultCapability must be a JSON object")
+        allowed = {"schema_version", "component", "contract"}
+        unknown = sorted(set(value) - allowed)
+        missing = sorted(allowed - set(value))
+        if unknown or missing:
+            details: list[str] = []
+            if unknown:
+                details.append("unsupported fields: " + ", ".join(unknown))
+            if missing:
+                details.append("missing required fields: " + ", ".join(missing))
+            raise ValueError("HeadResultCapability has " + "; ".join(details))
+        return cls(
+            schema_version=value["schema_version"],
+            component=value["component"],
+            contract=value["contract"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AdapterCapabilities:
     """Immutable representation-surface capabilities for one adapter family.
 
@@ -219,7 +282,7 @@ class AdapterCapabilities:
     supports_residual_write: bool = False
     sample_mapping: SampleMappingCapability | None = None
     modality_mapping: ModalityMappingCapability | None = None
-    head_result: None = None
+    head_result: HeadResultCapability | None = None
     attention_bias: None = None
     schema_version: int = _CAPABILITY_SCHEMA_VERSION
 
@@ -254,10 +317,10 @@ class AdapterCapabilities:
             raise TypeError(
                 "modality_mapping must be ModalityMappingCapability or None"
             )
-        if self.head_result is not None:
-            raise ValueError(
-                "head_result is unsupported by this release and must be None"
-            )
+        if self.head_result is not None and not isinstance(
+            self.head_result, HeadResultCapability
+        ):
+            raise TypeError("head_result must be HeadResultCapability or None")
         if self.attention_bias is not None:
             raise ValueError(
                 "attention_bias is unsupported by this release and must be None"
@@ -294,7 +357,9 @@ class AdapterCapabilities:
                 if self.modality_mapping is None
                 else self.modality_mapping.to_dict()
             ),
-            "head_result": None,
+            "head_result": (
+                None if self.head_result is None else self.head_result.to_dict()
+            ),
             "attention_bias": None,
         }
 
@@ -329,10 +394,13 @@ class AdapterCapabilities:
             raise TypeError("residual_sites must be a JSON list")
         sample_mapping = value["sample_mapping"]
         modality_mapping = value["modality_mapping"]
+        head_result = value["head_result"]
         if sample_mapping is not None and not isinstance(sample_mapping, dict):
             raise TypeError("sample_mapping must be a JSON object or null")
         if modality_mapping is not None and not isinstance(modality_mapping, dict):
             raise TypeError("modality_mapping must be a JSON object or null")
+        if head_result is not None and not isinstance(head_result, dict):
+            raise TypeError("head_result must be a JSON object or null")
         return cls(
             schema_version=value["schema_version"],
             adapter_name=value["adapter_name"],
@@ -349,7 +417,11 @@ class AdapterCapabilities:
                 if modality_mapping is None
                 else ModalityMappingCapability.from_dict(modality_mapping)
             ),
-            head_result=value["head_result"],
+            head_result=(
+                None
+                if head_result is None
+                else HeadResultCapability.from_dict(head_result)
+            ),
             attention_bias=value["attention_bias"],
         )
 
@@ -364,7 +436,9 @@ class AdapterCapabilities:
             return self.sample_mapping is not None
         if requirement == "modality_mapping":
             return self.modality_mapping is not None
-        if requirement in {"head_result", "attention_bias"}:
+        if requirement == "head_result":
+            return self.head_result is not None
+        if requirement == "attention_bias":
             return False
         return False
 
@@ -395,7 +469,7 @@ class AdapterCapabilities:
                 f"residual_write={self.supports_residual_write}, "
                 f"sample_mapping={self.sample_mapping is not None}, "
                 f"modality_mapping={self.modality_mapping is not None}, "
-                "head_result=False, attention_bias=False)"
+                f"head_result={self.head_result is not None}, attention_bias=False)"
             )
         if requirement not in _KNOWN_REQUIREMENTS:
             return (
@@ -417,6 +491,7 @@ class AdapterCapabilities:
 
 __all__ = [
     "AdapterCapabilities",
+    "HeadResultCapability",
     "ModalityMappingCapability",
     "SampleMappingCapability",
 ]

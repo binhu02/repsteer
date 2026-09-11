@@ -1,4 +1,4 @@
-"""Difference-in-means (and CAA alias) learner."""
+"""Difference-in-means learner. See :mod:`repsteer.learners.actadd` for CAA."""
 
 from __future__ import annotations
 
@@ -45,7 +45,16 @@ diff_mean = compute_diff_mean
 
 @dataclass
 class DiffMean(ContrastiveLearner):
-    """Learn a direction from independently weighted positive/negative groups."""
+    """Learn a direction from independently weighted positive/negative groups.
+
+    ``normalize`` defaults to ``"l2"``: repsteer's own convention, so the
+    returned direction has unit norm and callers control magnitude entirely
+    through ``strength``. This is a design choice, not a specific paper's
+    reproduction — mass-mean-difference readers such as RepE's
+    ``ClusterMeanRepReader`` return the raw, unnormalized ``mean(positive) -
+    mean(negative)`` vector instead. Pass ``normalize=None`` to match that
+    raw-vector convention.
+    """
 
     method: ClassVar[str] = "diff_mean"
 
